@@ -7,9 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		C977CB1F2E99187D001E383A /* VecturaKit in Frameworks */ = {isa = PBXBuildFile; productRef = C977CB1E2E99187D001E383A /* VecturaKit */; };
-		C977CB212E99187D001E383A /* VecturaMLXKit in Frameworks */ = {isa = PBXBuildFile; productRef = C977CB202E99187D001E383A /* VecturaMLXKit */; };
-		C977CB282E991B57001E383A /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = C977CB272E991B57001E383A /* MLXEmbedders */; };
+		29A7729C2E9CF25E0065BA73 /* ChromaSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 29A7729B2E9CF25E0065BA73 /* ChromaSwift */; };
+		C977CB2A2E991C00001E383A /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = C977CB292E991C00001E383A /* MarkdownUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,9 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C977CB212E99187D001E383A /* VecturaMLXKit in Frameworks */,
-				C977CB1F2E99187D001E383A /* VecturaKit in Frameworks */,
-				C977CB282E991B57001E383A /* MLXEmbedders in Frameworks */,
+				29A7729C2E9CF25E0065BA73 /* ChromaSwift in Frameworks */,
+				C977CB2A2E991C00001E383A /* MarkdownUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -121,9 +119,8 @@
 			);
 			name = Index;
 			packageProductDependencies = (
-				C977CB1E2E99187D001E383A /* VecturaKit */,
-				C977CB202E99187D001E383A /* VecturaMLXKit */,
-				C977CB272E991B57001E383A /* MLXEmbedders */,
+				C977CB292E991C00001E383A /* MarkdownUI */,
+				29A7729B2E9CF25E0065BA73 /* ChromaSwift */,
 			);
 			productName = Index;
 			productReference = C977CAD42E990B68001E383A /* Index.app */;
@@ -208,8 +205,8 @@
 			mainGroup = C977CACB2E990B68001E383A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				C977CB1D2E99187D001E383A /* XCRemoteSwiftPackageReference "VecturaKit" */,
-				C977CB262E991B57001E383A /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+				C977CB2B2E991C00001E383A /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
+				29A7729A2E9CF25E0065BA73 /* XCRemoteSwiftPackageReference "chroma-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C977CAD52E990B68001E383A /* Products */;
@@ -406,6 +403,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = N7J3BYZ94H;
@@ -442,6 +441,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.newindustries.Index;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -462,6 +462,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Index/Index.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = N7J3BYZ94H;
@@ -498,6 +500,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.newindustries.Index;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -656,39 +659,34 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		C977CB1D2E99187D001E383A /* XCRemoteSwiftPackageReference "VecturaKit" */ = {
+		29A7729A2E9CF25E0065BA73 /* XCRemoteSwiftPackageReference "chroma-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/rryam/VecturaKit.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		C977CB262E991B57001E383A /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples";
+			repositoryURL = "https://github.com/chroma-core/chroma-swift.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 2.25.8;
+				minimumVersion = 1.0.0;
+			};
+		};
+		C977CB2B2E991C00001E383A /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		C977CB1E2E99187D001E383A /* VecturaKit */ = {
+		29A7729B2E9CF25E0065BA73 /* ChromaSwift */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = C977CB1D2E99187D001E383A /* XCRemoteSwiftPackageReference "VecturaKit" */;
-			productName = VecturaKit;
+			package = 29A7729A2E9CF25E0065BA73 /* XCRemoteSwiftPackageReference "chroma-swift" */;
+			productName = ChromaSwift;
 		};
-		C977CB202E99187D001E383A /* VecturaMLXKit */ = {
+		C977CB292E991C00001E383A /* MarkdownUI */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = C977CB1D2E99187D001E383A /* XCRemoteSwiftPackageReference "VecturaKit" */;
-			productName = VecturaMLXKit;
-		};
-		C977CB272E991B57001E383A /* MLXEmbedders */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C977CB262E991B57001E383A /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
-			productName = MLXEmbedders;
+			package = C977CB2B2E991C00001E383A /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

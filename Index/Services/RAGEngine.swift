@@ -12,7 +12,8 @@ import Observation
 @Observable
 class RAGEngine {
     private var session: LanguageModelSession?
-    private var vectorDB: VecturaDB?
+    private var permissiveSession: LanguageModelSession?
+    private var vectorDB: ChromaVectorDB?
 
     var isAvailable: Bool = false
 
@@ -23,11 +24,13 @@ class RAGEngine {
     }
 
     private func initialize() async {
-        let model = SystemLanguageModel.default
+        let permissiveModel = SystemLanguageModel(guardrails: .permissiveContentTransformations)
 
-        switch model.availability {
+        switch permissiveModel.availability {
         case .available:
+            // Use permissive guardrails for all operations since we're working with personal notes
             session = LanguageModelSession(
+                model: permissiveModel,
                 instructions: """
                 You are a helpful assistant for a personal knowledge management system.
                 Answer questions based on the provided context from the user's documents.
@@ -35,8 +38,19 @@ class RAGEngine {
                 Be concise but thorough. If the context doesn't contain enough information, say so.
                 """
             )
+
+            // Use the same permissive model for title/summary generation
+            permissiveSession = LanguageModelSession(
+                model: permissiveModel,
+                instructions: """
+                You are processing content from a user's personal notes.
+                Generate concise titles and summaries based on the content provided.
+                Be neutral and factual. Do not refuse or apologize.
+                """
+            )
+
             isAvailable = true
-            print("✅ Foundation Models available")
+            print("✅ Foundation Models available (permissive mode for personal notes)")
 
         case .unavailable(let reason):
             isAvailable = false
@@ -65,7 +79,7 @@ class RAGEngine {
 
                     print("   Searching vector DB...")
 
-                    // 1. Search vector DB (VecturaMLXKit handles embedding internally)
+                    // 1. Search vector DB (ChromaDB handles embedding internally)
                     let searchResults = try await vectorDB.search(
                         query: question,
                         numResults: 10,  // Get more results for better coverage
@@ -181,6 +195,166 @@ class RAGEngine {
         return context
     }
 
+    func generateTitle(from content: String, documentTitle: String = "Document") async throws -> String {
+        guard isAvailable, let permissiveSession = permissiveSession else {
+            print("❌ Foundation Models not available for title generation")
+            throw RAGError.modelNotAvailable
+        }
+
+        let taskID = UUID().uuidString
+
+        // Register task with queue
+        await MainActor.run {
+            ProcessingQueue.shared.addTask(id: taskID, documentTitle: documentTitle, type: .titleGeneration)
+            ProcessingQueue.shared.updateProgress(id: taskID, current: 1, total: 1, status: "Generating title...")
+        }
+
+        defer {
+            Task { @MainActor in
+                ProcessingQueue.shared.completeTask(id: taskID)
+            }
+        }
+
+        // Limit content to first 1000 chars to avoid context issues
+        let limitedContent = content.count > 1000
+            ? String(content.prefix(1000)) + "..."
+            : content
+
+        guard !limitedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            print("⚠️ Empty content, cannot generate title")
+            throw RAGError.emptyContent
+        }
+
+        let prompt = """
+        You are helping organize a personal knowledge base. Generate a short, descriptive title (3-8 words) for this note.
+
+        Just provide the title - no quotes, no explanations.
+
+        Note content:
+        \(limitedContent)
+
+        Title:
+        """
+
+        print("🎯 Generating title from content...")
+
+        let stream = permissiveSession.streamResponse(to: prompt)
+        let response = try await stream.collect()
+        let title = response.content
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+
+        // Check for guardrail refusal responses
+        let refusalPhrases = [
+            "i cannot",
+            "i can't",
+            "i'm unable",
+            "i am unable",
+            "i cannot fulfill",
+            "i can't fulfill",
+            "unable to assist",
+            "cannot assist",
+            "i apologize",
+            "i must decline"
+        ]
+
+        let lowerTitle = title.lowercased()
+        let isRefusal = refusalPhrases.contains { lowerTitle.contains($0) }
+
+        if isRefusal {
+            print("⚠️ Title generation was refused by guardrails - using fallback")
+            return "Untitled"
+        }
+
+        print("✅ Generated title: \"\(title)\"")
+
+        return title.isEmpty ? "Untitled" : title
+    }
+
+    func generateSummary(from content: String, documentTitle: String = "Document") async -> String {
+        guard isAvailable, let permissiveSession = permissiveSession else {
+            print("❌ Foundation Models not available for summary generation")
+            return ""
+        }
+
+        let taskID = UUID().uuidString
+
+        // Register task with queue
+        await MainActor.run {
+            ProcessingQueue.shared.addTask(id: taskID, documentTitle: documentTitle, type: .summaryGeneration)
+            ProcessingQueue.shared.updateProgress(id: taskID, current: 1, total: 1, status: "Generating summary...")
+        }
+
+        defer {
+            Task { @MainActor in
+                ProcessingQueue.shared.completeTask(id: taskID)
+            }
+        }
+
+        // Limit content to first 1500 chars for summary context
+        let limitedContent = content.count > 1500
+            ? String(content.prefix(1500)) + "..."
+            : content
+
+        guard !limitedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            print("⚠️ Empty content, cannot generate summary")
+            return ""
+        }
+
+        let prompt = """
+        You are helping organize a personal knowledge base. Write a brief one-sentence summary (15-25 words) of this note.
+
+        Just provide the summary - no quotes, no preamble.
+
+        Note content:
+        \(limitedContent)
+
+        Summary:
+        """
+
+        print("📝 Generating summary from content...")
+
+        do {
+            let stream = permissiveSession.streamResponse(to: prompt)
+            let response = try await stream.collect()
+            let summary = response.content
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+
+            // Check for guardrail refusal responses
+            let refusalPhrases = [
+                "i cannot",
+                "i can't",
+                "i'm unable",
+                "i am unable",
+                "i cannot fulfill",
+                "i can't fulfill",
+                "unable to assist",
+                "cannot assist",
+                "i apologize",
+                "i must decline",
+                "against my guidelines",
+                "violates guidelines",
+                "not appropriate"
+            ]
+
+            let lowerSummary = summary.lowercased()
+            let isRefusal = refusalPhrases.contains { lowerSummary.contains($0) }
+
+            if isRefusal {
+                print("⚠️ Summary generation was refused by guardrails - returning empty")
+                return ""
+            }
+
+            print("✅ Generated summary: \"\(summary)\"")
+
+            return summary.isEmpty ? "" : summary
+        } catch {
+            print("⚠️ Summary generation failed: \(error.localizedDescription)")
+            return ""
+        }
+    }
+
     private func summarizeChunks(_ results: [SearchResult], question: String, session: LanguageModelSession) async throws -> String {
         // Split into batches of 3-4 chunks
         let batchSize = 3
@@ -259,6 +433,7 @@ enum RAGError: Error, LocalizedError {
     case vectorDBNotAvailable
     case noRelevantDocuments
     case queryFailed
+    case emptyContent
 
     var errorDescription: String? {
         switch self {
@@ -270,6 +445,8 @@ enum RAGError: Error, LocalizedError {
             return "No relevant documents found for your query. Try different search terms."
         case .queryFailed:
             return "Query failed. Please try again."
+        case .emptyContent:
+            return "Cannot generate title from empty content."
         }
     }
 }

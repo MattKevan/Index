@@ -8,36 +8,55 @@
 import SwiftUI
 import SwiftData
 
+// Global shared model container for actors and background tasks
+let sharedModelContainer: ModelContainer = {
+    let schema = Schema([
+        Folder.self,
+        Document.self,
+        DocumentVersion.self,
+        Chunk.self
+    ])
+    let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+
+    do {
+        return try ModelContainer(for: schema, configurations: [modelConfiguration])
+    } catch {
+        fatalError("Could not create ModelContainer: \(error)")
+    }
+}()
+
 @main
 struct IndexApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Folder.self,
-            Document.self,
-            DocumentVersion.self,
-            Chunk.self
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+    // Use the global shared model container
+    private let container = sharedModelContainer
 
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+    // Shared processing queue
+    @State private var processingQueue = ProcessingQueue.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(processingQueue)
         }
-        .modelContainer(sharedModelContainer)
+        .modelContainer(container)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Import Text Files...") {
+                Button("Open...") {
                     NotificationCenter.default.post(name: .importFiles, object: nil)
                 }
-                .keyboardShortcut("i", modifiers: [.command])
+                .keyboardShortcut("o", modifiers: [.command])
+
+                Button("Reprocess Document") {
+                    NotificationCenter.default.post(name: .reprocessDocument, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             }
+
+            // Enable text formatting commands (Format menu + keyboard shortcuts)
+            TextFormattingCommands()
+
+            // Enable text editing commands (Edit menu + find/replace)
+            TextEditingCommands()
         }
     }
 }
@@ -45,4 +64,5 @@ struct IndexApp: App {
 extension Notification.Name {
     static let importFiles = Notification.Name("importFiles")
     static let openDocument = Notification.Name("openDocument")
+    static let reprocessDocument = Notification.Name("reprocessDocument")
 }

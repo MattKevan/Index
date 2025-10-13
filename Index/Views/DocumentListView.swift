@@ -14,12 +14,11 @@ struct DocumentListView: View {
     let folder: Folder
     @Binding var selectedDocument: Document?
 
-    @State private var isAddingDocument = false
-    @State private var newDocTitle = ""
     @State private var isImporting = false
+    @State private var hasEnqueuedRendering = false
 
     var sortedDocuments: [Document] {
-        folder.documents.sorted { $0.modifiedAt > $1.modifiedAt }
+        folder.documents.sorted { $0.createdAt > $1.createdAt }  // Sort by creation date, newest first
     }
 
     var body: some View {
@@ -30,16 +29,12 @@ struct DocumentListView: View {
                         Text(document.title)
                             .font(.headline)
 
-                        HStack {
-                            Text(document.modifiedAt, style: .relative)
+                        // Show summary if available
+                        if let summary = document.summary, !summary.isEmpty {
+                            Text(summary)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-
-                            if !document.isProcessed {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.caption)
-                                    .foregroundStyle(.blue)
-                            }
+                                .lineLimit(2)
                         }
                     }
                 }
@@ -51,28 +46,6 @@ struct DocumentListView: View {
             }
         }
         .navigationTitle(folder.name)
-        .toolbar {
-            ToolbarItem {
-                Button(action: { isAddingDocument = true }) {
-                    Label("Add Document", systemImage: "doc.badge.plus")
-                }
-            }
-
-            ToolbarItem {
-                Button(action: { isImporting = true }) {
-                    Label("Import", systemImage: "square.and.arrow.down")
-                }
-            }
-        }
-        .alert("New Document", isPresented: $isAddingDocument) {
-            TextField("Document Title", text: $newDocTitle)
-            Button("Cancel", role: .cancel) {
-                newDocTitle = ""
-            }
-            Button("Create") {
-                addDocument()
-            }
-        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.plainText, .text],
@@ -86,21 +59,35 @@ struct DocumentListView: View {
                 isImporting = true
             }
         }
+        .task {
+            // Proactively enqueue documents for background rendering when list loads
+            await enqueueDocumentsForRendering()
+        }
     }
 
-    private func addDocument() {
-        guard !newDocTitle.isEmpty else { return }
+    private func enqueueDocumentsForRendering() async {
+        // Only enqueue once per folder view
+        guard !hasEnqueuedRendering else { return }
+        hasEnqueuedRendering = true
 
-        let document = Document(title: newDocTitle, folder: folder)
-        modelContext.insert(document)
+        print("📄 Enqueueing \(sortedDocuments.count) documents for background rendering")
 
-        do {
-            try modelContext.save()
-            selectedDocument = document
-            newDocTitle = ""
-        } catch {
-            print("Error creating document: \(error)")
+        // Enqueue all documents in this folder for background rendering
+        await MainActor.run {
+            for document in sortedDocuments {
+                let hash = document.calculateContentHash()
+
+                // Enqueue with normal priority (will render in background)
+                MarkdownRenderingPipeline.shared.enqueueRender(
+                    documentId: document.id,
+                    content: document.content,
+                    contentHash: hash,
+                    priority: .normal
+                )
+            }
         }
+
+        print("📄 Background rendering queue populated")
     }
 
     private func deleteDocument(_ document: Document) {
@@ -128,20 +115,22 @@ struct DocumentListView: View {
                 let content = try String(contentsOf: url, encoding: .utf8)
                 let title = url.deletingPathExtension().lastPathComponent
 
-                await MainActor.run {
-                    let document = Document(
+                let documentID = await MainActor.run {
+                    let doc = Document(
                         title: title,
                         content: content,
                         folder: folder
                     )
 
-                    modelContext.insert(document)
+                    modelContext.insert(doc)
                     try? modelContext.save()
+                    return doc.persistentModelID
+                }
 
-                    // Trigger processing pipeline
-                    Task {
-                        await ProcessingPipeline.shared.processDocument(document)
-                    }
+                // Trigger processing pipeline in background to avoid UI freeze
+                let cancellationToken = CancellationToken()
+                Task.detached(priority: .utility) {
+                    await ProcessingPipeline.shared.processDocument(documentID: documentID, cancellationToken: cancellationToken)
                 }
 
             } catch {
