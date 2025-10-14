@@ -14,7 +14,8 @@ let sharedModelContainer: ModelContainer = {
         Folder.self,
         Document.self,
         DocumentVersion.self,
-        Chunk.self
+        Chunk.self,
+        TransformationPreset.self
     ])
     let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 

@@ -25,6 +25,13 @@ struct DocumentDetailView: View {
     @State private var isLoadingContent: Bool = false
     @State private var contentLoadError: Error?
 
+    // PDF view mode
+    @State private var pdfViewMode: PDFViewMode = .pdf
+
+    // Transformation mode state
+    @State private var selectedTransformPreset: TransformationPreset?
+    @State private var needsTransformRegeneration = false
+
     private let ragEngine = RAGEngine()
     private let typography = TypographyStyle.default
 
@@ -34,9 +41,56 @@ struct DocumentDetailView: View {
     enum ViewMode {
         case edit
         case view
+        case transform
+    }
+
+    // Computed property to control inspector visibility
+    private var isInspectorPresented: Bool {
+        viewMode == .transform
     }
 
     var body: some View {
+        // Route to appropriate view based on document type
+        Group {
+            switch document.effectiveDocumentType {
+            case .pdf:
+                PDFDocumentView(document: document, viewMode: $pdfViewMode)
+                    .toolbar {
+                        ToolbarItem {
+                            // PDF view mode toggle
+                            Picker("View Mode", selection: $pdfViewMode) {
+                                Text("PDF").tag(PDFViewMode.pdf)
+                                Text("Text").tag(PDFViewMode.text)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 140)
+                        }
+
+                        ToolbarItem {
+                            Button(action: {
+                                openPDFInPreview()
+                            }) {
+                                Label("Open in Preview", systemImage: "arrow.up.forward.app")
+                            }
+                            .help("Open PDF in Preview app")
+                        }
+                    }
+            case .epub:
+                // Future: EPUBDocumentView(document: document)
+                unsupportedDocumentView(type: "EPUB")
+            case .docx:
+                // Future: DOCXDocumentView(document: document)
+                unsupportedDocumentView(type: "DOCX")
+            case .markdown, .plainText:
+                markdownEditorView
+            }
+        }
+    }
+
+    // MARK: - Markdown Editor View
+
+    @ViewBuilder
+    private var markdownEditorView: some View {
         VStack(spacing: 0) {
             // Title bar
             VStack(alignment: .leading, spacing: 8) {
@@ -66,7 +120,14 @@ struct DocumentDetailView: View {
                 Spacer(minLength: typography.editorPadding)
 
                 Group {
-                    if viewMode == .view {
+                    if viewMode == .transform {
+                        // Transform mode: AI-powered document transformations
+                        TransformationView(
+                            document: document,
+                            selectedPreset: $selectedTransformPreset,
+                            needsRegeneration: $needsTransformRegeneration
+                        )
+                    } else if viewMode == .view {
                         // View mode: Rendered Markdown with performance optimization
                         ZStack {
                             if editableContent.count > largeDocumentThreshold {
@@ -152,9 +213,10 @@ struct DocumentDetailView: View {
                 Picker("Mode", selection: $viewMode) {
                     Text("Edit").tag(ViewMode.edit)
                     Text("View").tag(ViewMode.view)
+                    Text("Transform").tag(ViewMode.transform)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 140)
+                .frame(width: 240)
             }
 
             ToolbarItem {
@@ -249,6 +311,29 @@ struct DocumentDetailView: View {
             // Then load cached render or render in background when document changes
             await loadOrRenderPreview()
         }
+        .inspector(isPresented: .constant(isInspectorPresented)) {
+            if viewMode == .transform {
+                TransformationPresetsSidebar(
+                    selectedPreset: $selectedTransformPreset,
+                    needsRegeneration: $needsTransformRegeneration
+                ) { preset in
+                    // Update the binding - TransformationView will react to the change
+                    selectedTransformPreset = preset
+                }
+                .inspectorColumnWidth(min: 220, ideal: 260, max: 300)
+            }
+        }
+    }
+
+    // MARK: - Unsupported Document Types
+
+    @ViewBuilder
+    private func unsupportedDocumentView(type: String) -> some View {
+        ContentUnavailableView(
+            "\(type) Not Yet Supported",
+            systemImage: "doc.text",
+            description: Text("\(type) document viewing will be available in a future update. For now, you can view the extracted text.")
+        )
     }
 
     // MARK: - Content Loading
@@ -484,6 +569,17 @@ struct DocumentDetailView: View {
         plainText = plainText.replacingOccurrences(of: #"\[(.+?)\]\(.+?\)"#, with: "$1", options: .regularExpression)
 
         return plainText
+    }
+
+    // Open PDF in Preview app
+    private func openPDFInPreview() {
+        guard let originalFileURL = document.originalFileURL else {
+            print("⚠️ No original PDF file URL available")
+            return
+        }
+
+        NSWorkspace.shared.open(originalFileURL)
+        print("📄 Opening PDF in Preview: \(originalFileURL.lastPathComponent)")
     }
 }
 

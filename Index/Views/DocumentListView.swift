@@ -40,7 +40,9 @@ struct DocumentListView: View {
                 }
                 .contextMenu {
                     Button("Delete", systemImage: "trash", role: .destructive) {
-                        deleteDocument(document)
+                        Task {
+                            await deleteDocument(document)
+                        }
                     }
                 }
             }
@@ -90,9 +92,41 @@ struct DocumentListView: View {
         print("📄 Background rendering queue populated")
     }
 
-    private func deleteDocument(_ document: Document) {
-        modelContext.delete(document)
-        try? modelContext.save()
+    private func deleteDocument(_ document: Document) async {
+        print("🗑️ Deleting document: \(document.title)")
+        print("   - Document type: \(document.effectiveDocumentType.rawValue)")
+        print("   - fileURL: \(document.fileURL?.path ?? "nil")")
+        print("   - originalFileURL: \(document.originalFileURL?.path ?? "nil")")
+
+        // Delete associated files from iCloud Drive first
+        do {
+            // Delete extracted text file (markdown file)
+            if let fileURL = document.fileURL {
+                try await FileStorageManager.shared.deleteFile(at: fileURL)
+                print("✅ Deleted extracted text file: \(fileURL.lastPathComponent)")
+            } else {
+                print("⚠️ No extracted text file to delete")
+            }
+
+            // Delete original file (for imported PDFs, EPUBs, etc.)
+            if let originalFileURL = document.originalFileURL {
+                try await FileStorageManager.shared.deleteFile(at: originalFileURL)
+                print("✅ Deleted original file: \(originalFileURL.lastPathComponent)")
+            } else {
+                print("⚠️ No original file to delete")
+            }
+        } catch {
+            print("❌ Failed to delete files: \(error)")
+            // Continue with document deletion even if file deletion fails
+        }
+
+        // Delete document from SwiftData
+        await MainActor.run {
+            modelContext.delete(document)
+            try? modelContext.save()
+        }
+
+        print("✅ Deleted document from database: \(document.title)")
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {

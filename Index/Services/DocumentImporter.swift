@@ -1,0 +1,238 @@
+//
+//  DocumentImporter.swift
+//  Index
+//
+//  Created by Claude on 10/14/2025.
+//
+
+import Foundation
+import SwiftData
+import UniformTypeIdentifiers
+
+/// Actor-isolated service for importing documents of various types
+actor DocumentImporter {
+    static let shared = DocumentImporter()
+
+    private let fileStorage = FileStorageManager.shared
+    private let pdfExtractor = PDFTextExtractor.shared
+
+    private init() {}
+
+    // MARK: - Import Methods
+
+    /// Import a document file into the specified folder
+    /// - Parameters:
+    ///   - sourceURL: URL of the file to import
+    ///   - folder: Target folder for the document
+    ///   - context: SwiftData model context
+    /// - Returns: Created Document model
+    /// - Throws: ImportError if import fails
+    func importDocument(from sourceURL: URL, toFolder folder: Folder, context: ModelContext) async throws -> Document {
+        // Detect document type
+        let documentType = try detectDocumentType(for: sourceURL)
+
+        guard documentType == .pdf else {
+            throw ImportError.unsupportedFileType(message: "Only PDF files are currently supported. EPUB and DOCX support coming soon.")
+        }
+
+        // Generate unique title from filename
+        let title = sourceURL.deletingPathExtension().lastPathComponent
+
+        print("📥 Importing \(documentType.rawValue.uppercased()): \(title)")
+
+        // Copy original file to iCloud
+        let originalFileName = sourceURL.lastPathComponent
+        let originalFileURL = try await fileStorage.copyFileToiCloud(
+            from: sourceURL,
+            toFolder: folder.name,
+            fileName: originalFileName
+        )
+
+        print("✅ Copied original file to iCloud: \(originalFileURL.path)")
+
+        // Extract text based on document type
+        let extractedText: String
+        switch documentType {
+        case .pdf:
+            extractedText = try await pdfExtractor.extractText(from: sourceURL)
+        case .epub, .docx:
+            throw ImportError.unsupportedFileType(message: "EPUB and DOCX support coming in Phase 2")
+        case .markdown, .plainText:
+            throw ImportError.unsupportedFileType(message: "Use the 'New Document' button for markdown files")
+        }
+
+        // Create extracted text file in iCloud
+        let extractedFileName = "\(title).md"
+        let extractedTextURL = try await createExtractedTextFile(
+            content: extractedText,
+            fileName: extractedFileName,
+            folderName: folder.name
+        )
+
+        print("✅ Created extracted text file: \(extractedTextURL.path)")
+
+        // Create Document model
+        let document = Document(
+            title: title,
+            documentType: documentType,
+            originalFileURL: originalFileURL,
+            originalFileName: originalFileName,
+            extractedTextURL: extractedTextURL,
+            extractedTextFileName: extractedFileName,
+            folder: folder
+        )
+
+        // Add to context
+        context.insert(document)
+
+        // Save context
+        try context.save()
+
+        print("✅ Document imported successfully: \(title)")
+
+        return document
+    }
+
+    /// Import multiple documents in batch
+    /// - Parameters:
+    ///   - sourceURLs: Array of file URLs to import
+    ///   - folder: Target folder for all documents
+    ///   - context: SwiftData model context
+    /// - Returns: Array of created documents and any errors
+    func importDocuments(from sourceURLs: [URL], toFolder folder: Folder, context: ModelContext) async -> (documents: [Document], errors: [(URL, Error)]) {
+        var documents: [Document] = []
+        var errors: [(URL, Error)] = []
+
+        for sourceURL in sourceURLs {
+            do {
+                let document = try await importDocument(from: sourceURL, toFolder: folder, context: context)
+                documents.append(document)
+            } catch {
+                errors.append((sourceURL, error))
+                print("❌ Failed to import \(sourceURL.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        return (documents, errors)
+    }
+
+    // MARK: - File Type Detection
+
+    /// Detect document type from file URL using UTType
+    /// - Parameter url: File URL to analyze
+    /// - Returns: Detected DocumentType
+    /// - Throws: ImportError if file type cannot be determined
+    private func detectDocumentType(for url: URL) throws -> DocumentType {
+        // Get UTType from file extension
+        let fileExtension = url.pathExtension.lowercased()
+
+        // Check by extension first (more reliable)
+        switch fileExtension {
+        case "pdf":
+            return .pdf
+        case "epub":
+            return .epub
+        case "docx":
+            return .docx
+        case "md", "markdown":
+            return .markdown
+        case "txt":
+            return .plainText
+        default:
+            break
+        }
+
+        // Fallback to UTType checking
+        guard let contentType = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType else {
+            throw ImportError.unknownFileType
+        }
+
+        if contentType.conforms(to: .pdf) {
+            return .pdf
+        } else if contentType.identifier == "org.idpf.epub-container" || contentType.identifier == "public.epub" {
+            return .epub
+        } else if contentType.conforms(to: UTType(filenameExtension: "docx") ?? .data) {
+            return .docx
+        } else if contentType.conforms(to: .plainText) {
+            return .plainText
+        } else {
+            throw ImportError.unsupportedFileType(message: "File type not supported: \(contentType.identifier)")
+        }
+    }
+
+    // MARK: - Text Extraction
+
+    /// Create extracted text file in iCloud
+    /// - Parameters:
+    ///   - content: Extracted text content
+    ///   - fileName: Name for the extracted text file
+    ///   - folderName: iCloud folder name
+    /// - Returns: URL to the created file
+    private func createExtractedTextFile(content: String, fileName: String, folderName: String) async throws -> URL {
+        let folderURL = try await fileStorage.getFolderURL(folderName: folderName)
+        let fileURL = folderURL.appendingPathComponent(fileName)
+
+        // Write content to file
+        try await fileStorage.writeFile(content: content, to: fileURL)
+
+        return fileURL
+    }
+
+    // MARK: - Validation
+
+    /// Check if a file can be imported
+    /// - Parameter url: File URL to check
+    /// - Returns: True if file can be imported
+    func canImport(url: URL) async -> Bool {
+        do {
+            let documentType = try detectDocumentType(for: url)
+            // Currently only PDF is supported
+            return documentType == .pdf
+        } catch {
+            return false
+        }
+    }
+
+    /// Get supported file types for file picker
+    /// - Returns: Array of UTTypes that can be imported
+    static func supportedUTTypes() -> [UTType] {
+        return [
+            .pdf,
+            // Future support:
+            // UTType(filenameExtension: "epub") ?? .data,
+            // UTType(filenameExtension: "docx") ?? .data
+        ]
+    }
+
+    /// Get human-readable list of supported formats
+    /// - Returns: String describing supported formats
+    static func supportedFormatsDescription() -> String {
+        return "PDF documents"
+        // Future: "PDF, EPUB, and DOCX documents"
+    }
+}
+
+// MARK: - Error Types
+
+enum ImportError: Error, LocalizedError {
+    case unknownFileType
+    case unsupportedFileType(message: String)
+    case extractionFailed(message: String)
+    case fileAccessDenied
+    case iCloudUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .unknownFileType:
+            return "Could not determine the file type."
+        case .unsupportedFileType(let message):
+            return message
+        case .extractionFailed(let message):
+            return "Text extraction failed: \(message)"
+        case .fileAccessDenied:
+            return "Permission denied to access the file."
+        case .iCloudUnavailable:
+            return "iCloud Drive is not available."
+        }
+    }
+}

@@ -27,6 +27,11 @@ struct ContentView: View {
     @State private var documentMigration = DocumentMigration()
     @FocusState private var renamingFolder: Folder?
 
+    // File import state
+    @State private var showingFileImporter = false
+    @State private var importError: Error?
+    @State private var showImportError = false
+
     private var isSearching: Bool {
         if case .search = selectedNavigation {
             return true
@@ -194,6 +199,26 @@ struct ContentView: View {
                         Label("New Document", systemImage: "doc.badge.plus")
                     }
                 }
+
+                ToolbarItem {
+                    Button(action: { showingFileImporter = true }) {
+                        Label("Import Document", systemImage: "arrow.down.doc")
+                    }
+                }
+            }
+            .fileImporter(
+                isPresented: $showingFileImporter,
+                allowedContentTypes: DocumentImporter.supportedUTTypes(),
+                allowsMultipleSelection: true
+            ) { result in
+                Task {
+                    await handleFileImport(result: result, folder: folder)
+                }
+            }
+            .alert("Import Failed", isPresented: $showImportError, presenting: importError) { _ in
+                Button("OK") { importError = nil }
+            } message: { error in
+                Text(error.localizedDescription)
             }
         } else {
             ContentUnavailableView(
@@ -337,6 +362,70 @@ struct ContentView: View {
         modelContext.insert(folder)
         try? modelContext.save()
         selectedNavigation = .folder(folder)
+    }
+
+    private func handleFileImport(result: Result<[URL], Error>, folder: Folder) async {
+        do {
+            let fileURLs = try result.get()
+
+            guard !fileURLs.isEmpty else {
+                print("⚠️ No files selected")
+                return
+            }
+
+            print("📥 Importing \(fileURLs.count) file(s)...")
+
+            // Import documents using DocumentImporter
+            let (importedDocuments, errors) = await DocumentImporter.shared.importDocuments(
+                from: fileURLs,
+                toFolder: folder,
+                context: modelContext
+            )
+
+            // Report any import errors
+            if !errors.isEmpty {
+                print("⚠️ Import completed with \(errors.count) error(s)")
+                for (url, error) in errors {
+                    print("  - \(url.lastPathComponent): \(error.localizedDescription)")
+                }
+
+                // Show first error to user
+                if let firstError = errors.first?.1 {
+                    importError = firstError
+                    showImportError = true
+                }
+            }
+
+            // Successfully imported documents - add to processing queue and process
+            for document in importedDocuments {
+                // Add to processing queue for UI feedback
+                processingQueue.addTask(
+                    id: document.id.uuidString,
+                    documentTitle: document.title,
+                    type: .processing
+                )
+
+                // Process document asynchronously
+                Task {
+                    await ProcessingPipeline.shared.processDocument(documentID: document.persistentModelID)
+
+                    // Remove from queue when done
+                    processingQueue.completeTask(id: document.id.uuidString)
+                }
+            }
+
+            print("✅ Successfully imported \(importedDocuments.count) document(s)")
+
+            // Select the first imported document
+            if let firstDocument = importedDocuments.first {
+                selectedDocument = firstDocument
+            }
+
+        } catch {
+            print("❌ File import failed: \(error.localizedDescription)")
+            importError = error
+            showImportError = true
+        }
     }
 }
 

@@ -15,10 +15,23 @@ final class Document {
     @Attribute(.unique) var id: UUID
     var title: String
 
+    // Document type (optional for backward compatibility with existing documents)
+    // Defaults to markdown for legacy documents without this field
+    var documentType: DocumentType?
+
     // File-based storage properties
-    var fileURL: URL?
+    var fileURL: URL?       // Extracted/working text file (markdown format for all types)
     var fileName: String?
     var isFileBacked: Bool = false  // true = content in file, false = content in database (legacy)
+
+    // Imported document properties (for PDF/EPUB/DOCX)
+    var originalFileURL: URL?     // Original imported file (PDF/EPUB/DOCX)
+    var originalFileName: String? // Original file name with extension
+
+    // Computed property to get document type with fallback
+    var effectiveDocumentType: DocumentType {
+        return documentType ?? .markdown
+    }
 
     // Legacy: Store content as Markdown string for backward compatibility
     // For file-backed documents, this will be empty/ignored
@@ -44,6 +57,7 @@ final class Document {
     init(title: String, content: String = "", folder: Folder? = nil) {
         self.id = UUID()
         self.title = title
+        self.documentType = .markdown
         self.content = content
         self.createdAt = Date()
         self.modifiedAt = Date()
@@ -54,12 +68,46 @@ final class Document {
         self.isFileBacked = false
     }
 
-    /// Initialize with file-based storage
+    /// Initialize with file-based storage (for markdown documents)
     init(title: String, fileURL: URL, fileName: String, folder: Folder? = nil) {
         self.id = UUID()
         self.title = title
+        self.documentType = .markdown
         self.fileURL = fileURL
         self.fileName = fileName
+        self.isFileBacked = true
+        self.content = ""  // Empty for file-backed documents
+        self.createdAt = Date()
+        self.modifiedAt = Date()
+        self.isProcessed = false
+        self.processingStatus = .pending
+        self.folder = folder
+        self.versions = []
+    }
+
+    /// Initialize with imported document (PDF/EPUB/DOCX)
+    /// - Parameters:
+    ///   - title: Document title
+    ///   - documentType: Type of imported document
+    ///   - originalFileURL: URL to original imported file
+    ///   - originalFileName: Name of original file with extension
+    ///   - extractedTextURL: URL to extracted text file (markdown format)
+    ///   - extractedTextFileName: Name of extracted text file
+    ///   - folder: Parent folder
+    init(title: String,
+         documentType: DocumentType,
+         originalFileURL: URL,
+         originalFileName: String,
+         extractedTextURL: URL,
+         extractedTextFileName: String,
+         folder: Folder? = nil) {
+        self.id = UUID()
+        self.title = title
+        self.documentType = documentType
+        self.originalFileURL = originalFileURL
+        self.originalFileName = originalFileName
+        self.fileURL = extractedTextURL
+        self.fileName = extractedTextFileName
         self.isFileBacked = true
         self.content = ""  // Empty for file-backed documents
         self.createdAt = Date()
@@ -157,6 +205,16 @@ final class Document {
         guard let cachedHash = contentHash else { return false }
         return cachedHash == calculateContentHash()
     }
+}
+
+// MARK: - Document Types
+
+enum DocumentType: String, Codable {
+    case markdown   // Native markdown documents (default)
+    case pdf        // Imported PDF files
+    case epub       // Imported EPUB e-books
+    case docx       // Imported Microsoft Word documents
+    case plainText  // Plain text files
 }
 
 enum ProcessingStatus: String, Codable {

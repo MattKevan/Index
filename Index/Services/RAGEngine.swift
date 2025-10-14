@@ -412,6 +412,67 @@ class RAGEngine {
 
         return summaries.first ?? ""
     }
+
+    // MARK: - Document Transformation
+
+    /// Perform a document transformation using Foundation Models
+    /// Creates a fresh session for each transformation to avoid context accumulation
+    /// - Parameters:
+    ///   - prompt: Transformation instructions
+    ///   - content: Content to transform (can be empty if content is in prompt)
+    /// - Returns: Transformed content
+    func performTransformation(prompt: String, content: String) async throws -> String {
+        guard isAvailable else {
+            print("❌ Foundation Models not available for transformation")
+            throw RAGError.modelNotAvailable
+        }
+
+        // Create a fresh session for each transformation to avoid history accumulation
+        let permissiveModel = SystemLanguageModel(guardrails: .permissiveContentTransformations)
+        let freshSession = LanguageModelSession(
+            model: permissiveModel,
+            instructions: """
+            You are transforming content from a user's personal notes.
+            Follow the transformation instructions precisely.
+            Be neutral and factual. Do not refuse or apologize.
+            """
+        )
+
+        let fullPrompt: String
+        if content.isEmpty {
+            // Content already included in prompt (for multi-chunk processing)
+            fullPrompt = prompt
+        } else {
+            // Single transformation - add content section
+            fullPrompt = """
+            \(prompt)
+
+            Content to transform:
+            \(content)
+            """
+        }
+
+        print("🔄 Performing transformation...")
+        print("   Prompt length: \(prompt.count) chars (~\(prompt.count / 4) tokens)")
+        print("   Content length: \(content.count) chars (~\(content.count / 4) tokens)")
+        print("   Total: ~\((prompt.count + content.count) / 4) tokens (limit: 4,096)")
+
+        do {
+            let stream = freshSession.streamResponse(to: fullPrompt)
+            let response = try await stream.collect()
+
+            print("✅ Transformation complete (\(response.content.count) chars)")
+            return response.content
+
+        } catch let error as LanguageModelSession.GenerationError {
+            if case .exceededContextWindowSize = error {
+                print("❌ Context window exceeded during transformation")
+                print("   Actual prompt length: \(fullPrompt.count) chars")
+                throw RAGError.contextWindowExceeded
+            }
+            throw error
+        }
+    }
 }
 
 struct RAGResponse {
@@ -434,6 +495,7 @@ enum RAGError: Error, LocalizedError {
     case noRelevantDocuments
     case queryFailed
     case emptyContent
+    case contextWindowExceeded
 
     var errorDescription: String? {
         switch self {
@@ -447,6 +509,8 @@ enum RAGError: Error, LocalizedError {
             return "Query failed. Please try again."
         case .emptyContent:
             return "Cannot generate title from empty content."
+        case .contextWindowExceeded:
+            return "Document too large for context window. It will be automatically chunked and processed in sections."
         }
     }
 }
