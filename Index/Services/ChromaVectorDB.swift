@@ -71,13 +71,23 @@ actor ChromaVectorDB {
             embedder = try ChromaEmbedder(model: chromaModel)
             try await embedder?.loadModel()
 
-            // Create or get collection
+            // Delete existing collection to avoid dimension mismatches
+            // This ensures clean state when switching embedding models
+            do {
+                try Chroma.deleteCollection(collectionName: collectionName)
+                print("🗑️  Deleted existing collection (avoiding dimension mismatch)")
+            } catch {
+                // Collection might not exist yet - that's fine
+                print("ℹ️  No existing collection to delete")
+            }
+
+            // Create fresh collection with correct dimensions
             do {
                 _ = try Chroma.createCollection(name: collectionName)
-                print("✅ Created new collection: \(collectionName)")
+                print("✅ Created new collection: \(collectionName) (\(dimensions)-dim)")
             } catch {
-                // Collection might already exist
-                print("ℹ️  Using existing collection: \(collectionName)")
+                print("❌ Failed to create collection: \(error)")
+                throw error
             }
 
             _isInitialized = true

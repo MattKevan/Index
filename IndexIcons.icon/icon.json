@@ -1,0 +1,36 @@
+{
+  "fill" : {
+    "automatic-gradient" : "display-p3:0.00000,0.52226,0.57572,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "indexbox.png",
+          "name" : "indexbox",
+          "position" : {
+            "scale" : 0.67,
+            "translation-in-points" : [
+              0,
+              3.8
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

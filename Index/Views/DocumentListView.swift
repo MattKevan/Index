@@ -112,13 +112,25 @@ struct DocumentListView: View {
             defer { url.stopAccessingSecurityScopedResource() }
 
             do {
-                let content = try String(contentsOf: url, encoding: .utf8)
                 let title = url.deletingPathExtension().lastPathComponent
+                let fileName = url.lastPathComponent
+
+                // Copy file to iCloud Drive folder matching this sidebar folder
+                let folderName = folder.iCloudPath ?? folder.name
+                let fileURL = try await FileStorageManager.shared.copyFileToiCloud(
+                    from: url,
+                    toFolder: folderName,
+                    fileName: fileName
+                )
+
+                print("✅ Imported file to iCloud: \(fileURL.path)")
 
                 let documentID = await MainActor.run {
+                    // Create file-backed document
                     let doc = Document(
                         title: title,
-                        content: content,
+                        fileURL: fileURL,
+                        fileName: fileName,
                         folder: folder
                     )
 

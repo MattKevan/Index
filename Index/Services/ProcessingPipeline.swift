@@ -87,8 +87,11 @@ actor ProcessingPipeline {
         }
 
         do {
-            // 1. Chunk the document (use plain text for better embeddings)
-            let plainText = document.plainTextContent
+            // 1. Load content from file (if file-backed) or database (if legacy)
+            let content = try await document.loadContent()
+
+            // Strip Markdown for better embeddings
+            let plainText = stripMarkdownForEmbedding(content)
             let docID = document.id
 
             let chunks = await chunker.chunk(
@@ -236,7 +239,16 @@ actor ProcessingPipeline {
                 let needsTitle = document.title.trimmingCharacters(in: .whitespaces).isEmpty ||
                                 document.title == "Untitled"
                 let needsSummary = document.summary == nil || document.summary?.isEmpty == true
-                let hasContent = !document.content.trimmingCharacters(in: .whitespaces).isEmpty
+
+                // Check content (load async for file-backed documents)
+                var hasContent = false
+                do {
+                    let content = try await document.loadContent()
+                    hasContent = !content.trimmingCharacters(in: .whitespaces).isEmpty
+                } catch {
+                    // Fallback to legacy content check
+                    hasContent = !document.content.trimmingCharacters(in: .whitespaces).isEmpty
+                }
 
                 if hasContent && (needsTitle || needsSummary) {
                     documentsNeedingMetadata.append((
@@ -275,7 +287,17 @@ actor ProcessingPipeline {
         }
 
         let ragEngine = RAGEngine()
-        let plainText = document.plainTextContent
+
+        // Load content from file or database
+        var content: String
+        do {
+            content = try await document.loadContent()
+        } catch {
+            print("⚠️ Failed to load content for metadata generation: \(error)")
+            content = document.content // Fallback to database content
+        }
+
+        let plainText = stripMarkdownForEmbedding(content)
         let currentTitle = document.title
 
         // Generate title if needed
@@ -305,6 +327,41 @@ actor ProcessingPipeline {
                 print("   ✅ Generated summary for: \(document.title)")
             }
         }
+    }
+
+    // MARK: - Helper Methods
+
+    /// Strip Markdown syntax for cleaner embeddings
+    private func stripMarkdownForEmbedding(_ content: String) -> String {
+        var plainText = content
+
+        // Remove heading markers
+        plainText = plainText.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+
+        // Remove bold/italic markers
+        plainText = plainText.replacingOccurrences(of: #"\*\*\*(.+?)\*\*\*"#, with: "$1", options: .regularExpression)
+        plainText = plainText.replacingOccurrences(of: #"\*\*(.+?)\*\*"#, with: "$1", options: .regularExpression)
+        plainText = plainText.replacingOccurrences(of: #"\*(.+?)\*"#, with: "$1", options: .regularExpression)
+        plainText = plainText.replacingOccurrences(of: #"__(.+?)__"#, with: "$1", options: .regularExpression)
+        plainText = plainText.replacingOccurrences(of: #"_(.+?)_"#, with: "$1", options: .regularExpression)
+
+        // Remove inline code markers
+        plainText = plainText.replacingOccurrences(of: #"`(.+?)`"#, with: "$1", options: .regularExpression)
+
+        // Remove link syntax but keep text
+        plainText = plainText.replacingOccurrences(of: #"\[(.+?)\]\(.+?\)"#, with: "$1", options: .regularExpression)
+
+        // Remove image syntax
+        plainText = plainText.replacingOccurrences(of: #"!\[.*?\]\(.+?\)"#, with: "", options: .regularExpression)
+
+        // Remove list markers
+        plainText = plainText.replacingOccurrences(of: #"^[\*\-\+]\s+"#, with: "", options: .regularExpression)
+        plainText = plainText.replacingOccurrences(of: #"^\d+\.\s+"#, with: "", options: .regularExpression)
+
+        // Remove blockquote markers
+        plainText = plainText.replacingOccurrences(of: #"^>\s+"#, with: "", options: .regularExpression)
+
+        return plainText
     }
 }
 

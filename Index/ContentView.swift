@@ -23,7 +23,8 @@ struct ContentView: View {
     @State private var searchQuery: String = ""
     @State private var isVectorDBReady: Bool = false
     @State private var showProcessingQueue = false
-    @State private var migration = VectorDBMigration()
+    @State private var vectorDBMigration = VectorDBMigration()
+    @State private var documentMigration = DocumentMigration()
     @FocusState private var renamingFolder: Folder?
 
     private var isSearching: Bool {
@@ -55,6 +56,12 @@ struct ContentView: View {
         .task {
             await checkVectorDBReady()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Reconcile files when app becomes active
+            Task {
+                await FileSync.shared.reconcileAllFolders(modelContext: modelContext)
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .status) {
                 statusIndicator
@@ -78,6 +85,13 @@ struct ContentView: View {
                 .popover(isPresented: $showProcessingQueue) {
                     ProcessingQueueView()
                         .environment(processingQueue)
+                }
+                .onChange(of: processingQueue.tasks.count) { oldCount, newCount in
+                    // Keep popover open if tasks are still active
+                    if oldCount > newCount && newCount > 0 && showProcessingQueue {
+                        // Task completed but others remain - keep popover open
+                        showProcessingQueue = true
+                    }
                 }
             }
         }
@@ -115,11 +129,24 @@ struct ContentView: View {
             if case .search = newValue {
                 selectedDocument = nil
             }
+
+            // Reconcile folder when navigating to it
+            if case .folder(let folder) = newValue {
+                Task {
+                    await FileSync.shared.reconcileFolder(folder, modelContext: modelContext)
+                }
+            }
         }
         .onAppear {
             // Create default folder if none exist
             if folders.isEmpty {
                 createDefaultFolder()
+            }
+
+            // Initialize iCloudPath for existing folders that don't have it
+            for folder in folders where folder.iCloudPath == nil {
+                folder.iCloudPath = folder.name
+                try? modelContext.save()
             }
         }
     }
@@ -204,12 +231,21 @@ struct ContentView: View {
 
     @ViewBuilder
     private var statusIndicator: some View {
-        if migration.isMigrating {
+        if documentMigration.isMigrating {
             HStack(spacing: 6) {
-                ProgressView(value: migration.migrationProgress)
+                ProgressView(value: documentMigration.migrationProgress)
                     .controlSize(.small)
                     .frame(width: 100)
-                Text("Migrating to ChromaDB... (\(migration.processedDocuments)/\(migration.totalDocuments))")
+                Text("Migrating documents to iCloud... (\(documentMigration.processedDocuments)/\(documentMigration.totalDocuments))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else if vectorDBMigration.isMigrating {
+            HStack(spacing: 6) {
+                ProgressView(value: vectorDBMigration.migrationProgress)
+                    .controlSize(.small)
+                    .frame(width: 100)
+                Text("Migrating to ChromaDB... (\(vectorDBMigration.processedDocuments)/\(vectorDBMigration.totalDocuments))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -229,8 +265,11 @@ struct ContentView: View {
     private func checkVectorDBReady() async {
         print("📊 Checking VectorDB ready status...")
 
-        // Check if migration is needed and start it
-        await migration.checkAndMigrate(modelContext: modelContext)
+        // 1. Check if VectorDB migration is needed and start it
+        await vectorDBMigration.checkAndMigrate(modelContext: modelContext)
+
+        // 2. Migrate documents to file-based storage
+        await documentMigration.checkAndMigrate(modelContext: modelContext)
 
         // Poll for readiness with timeout
         for attempt in 1...30 {

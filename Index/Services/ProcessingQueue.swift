@@ -22,6 +22,11 @@ class ProcessingQueue {
     private init() {}
 
     func addTask(id: String, documentTitle: String, type: TaskType) {
+        // Don't add duplicate tasks
+        guard !tasks.contains(where: { $0.id == id }) else {
+            return
+        }
+
         let task = ProcessingTask(id: id, documentTitle: documentTitle, type: type)
         tasks.append(task)
     }

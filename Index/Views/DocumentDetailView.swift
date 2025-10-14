@@ -19,6 +19,12 @@ struct DocumentDetailView: View {
     @State private var renderedContent: MarkdownContent?  // Pre-parsed markdown content
     @State private var cachedContentHash: String?  // Hash of currently rendered content
     @State private var renderTask: Task<Void, Never>?  // Track rendering task for cancellation
+
+    // File-based content management
+    @State private var editableContent: String = ""  // In-memory content for editing
+    @State private var isLoadingContent: Bool = false
+    @State private var contentLoadError: Error?
+
     private let ragEngine = RAGEngine()
     private let typography = TypographyStyle.default
 
@@ -63,13 +69,13 @@ struct DocumentDetailView: View {
                     if viewMode == .view {
                         // View mode: Rendered Markdown with performance optimization
                         ZStack {
-                            if document.content.count > largeDocumentThreshold {
+                            if editableContent.count > largeDocumentThreshold {
                                 // For very large documents (>50k chars), use plain text to avoid UI freeze
                                 VStack(spacing: 0) {
                                     HStack {
                                         Image(systemName: "info.circle")
                                             .foregroundStyle(.secondary)
-                                        Text("Large document (\(document.content.count / 1000)KB) - showing plain text for performance")
+                                        Text("Large document (\(editableContent.count / 1000)KB) - showing plain text for performance")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                         Spacer()
@@ -79,24 +85,31 @@ struct DocumentDetailView: View {
                                     .background(.quaternary.opacity(0.5))
 
                                     ScrollView {
-                                        Text(document.content)
-                                            .font(.system(size: 16))
-                                            .lineSpacing(typography.lineSpacingPoints)
-                                            .textSelection(.enabled)
-                                            .padding(.vertical, 16)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        VStack {
+                                            Text(editableContent)
+                                                .font(.system(size: 16))
+                                                .lineSpacing(typography.lineSpacingPoints)
+                                                .textSelection(.enabled)
+                                                .frame(maxWidth: typography.maxColumnWidth, alignment: .leading)
+                                                .padding()
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .center)
                                     }
                                 }
-                                .frame(maxWidth: typography.maxColumnWidth)
+                                // removed outer frame(maxWidth: typography.maxColumnWidth)
                             } else if let content = renderedContent {
                                 // Render pre-parsed markdown content
                                 ScrollView {
-                                    Markdown(content)
-                                        .markdownTheme(.indexTheme)
-                                        .textSelection(.enabled)
-                                        .padding(.vertical, 16)
+                                    VStack {
+                                        Markdown(content)
+                                            .markdownTheme(.indexTheme)
+                                            .textSelection(.enabled)
+                                            .frame(maxWidth: typography.maxColumnWidth, alignment: .leading)
+                                            .padding()
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .center)
                                 }
-                                .frame(maxWidth: typography.maxColumnWidth)
+                                // removed frame(maxWidth: typography.maxColumnWidth)
                             } else {
                                 // Fallback while loading
                                 VStack {
@@ -110,13 +123,23 @@ struct DocumentDetailView: View {
                         }
                     } else {
                         // Edit mode: Plain text monospace editor
-                        TextEditor(text: $document.content)
-                            .font(.system(size: 16, design: .monospaced))
-                            .lineSpacing(typography.lineSpacingPoints)
-                            .frame(maxWidth: typography.maxColumnWidth)
-                            .onChange(of: document.content) { _, _ in
-                                scheduleAutosave()
+                        if isLoadingContent {
+                            VStack {
+                                Spacer()
+                                ProgressView("Loading...")
+                                    .controlSize(.large)
+                                Spacer()
                             }
+                            .frame(maxWidth: typography.maxColumnWidth)
+                        } else {
+                            TextEditor(text: $editableContent)
+                                .font(.system(size: 16, design: .monospaced))
+                                .lineSpacing(typography.lineSpacingPoints)
+                                .frame(maxWidth: typography.maxColumnWidth)
+                                .onChange(of: editableContent) { _, _ in
+                                    scheduleAutosave()
+                                }
+                        }
                     }
                 }
 
@@ -170,7 +193,7 @@ struct DocumentDetailView: View {
                 renderTask?.cancel()
             }
         }
-        .onChange(of: document.content) { _, newContent in
+        .onChange(of: editableContent) { _, newContent in
             // Invalidate memory cache when content changes
             let newHash = document.calculateContentHash()
             if cachedContentHash != newHash {
@@ -189,6 +212,10 @@ struct DocumentDetailView: View {
             }
         }
         .onChange(of: document.id) { oldValue, newValue in
+            // Load content for the new document
+            Task {
+                await loadDocumentContent()
+            }
             // When navigating AWAY from a document (oldValue has previous document)
             // Check if the title was deleted and regenerate if needed
             if oldValue != newValue {
@@ -216,8 +243,35 @@ struct DocumentDetailView: View {
             VersionHistoryView(document: document)
         }
         .task(id: document.id) {
-            // Load cached render or render in background when document changes
+            // Load document content first
+            await loadDocumentContent()
+
+            // Then load cached render or render in background when document changes
             await loadOrRenderPreview()
+        }
+    }
+
+    // MARK: - Content Loading
+
+    private func loadDocumentContent() async {
+        isLoadingContent = true
+        contentLoadError = nil
+
+        do {
+            let content = try await document.loadContent()
+            await MainActor.run {
+                editableContent = content
+                isLoadingContent = false
+            }
+            print("✅ Loaded document content (\(content.count) chars)")
+        } catch {
+            print("❌ Failed to load document content: \(error)")
+            await MainActor.run {
+                contentLoadError = error
+                isLoadingContent = false
+                // Fallback for legacy documents
+                editableContent = document.content
+            }
         }
     }
 
@@ -261,13 +315,13 @@ struct DocumentDetailView: View {
 
     private func renderPreview() async {
         // Skip rendering for very large documents - use plain text fallback instead
-        if document.content.count > largeDocumentThreshold {
-            print("📄 Skipping markdown render for large document (\(document.content.count) chars) - using plain text")
+        if editableContent.count > largeDocumentThreshold {
+            print("📄 Skipping markdown render for large document (\(editableContent.count) chars) - using plain text")
             return
         }
 
         let currentHash = document.calculateContentHash()
-        let content = document.content
+        let content = editableContent
 
         print("📄 Rendering preview (\(content.count) chars)")
 
@@ -326,11 +380,21 @@ struct DocumentDetailView: View {
         document.isProcessed = false // Mark for reprocessing
         document.processingStatus = .pending
 
+        // Save content to file (async)
+        Task {
+            do {
+                try await document.saveContent(editableContent)
+                print("✅ Saved document content to file")
+            } catch {
+                print("❌ Failed to save document content: \(error)")
+            }
+        }
+
         // Generate title if empty or still "Untitled"
         let needsTitleGeneration = document.title.trimmingCharacters(in: .whitespaces).isEmpty ||
                                    document.title == "Untitled"
 
-        if needsTitleGeneration && !document.content.trimmingCharacters(in: .whitespaces).isEmpty {
+        if needsTitleGeneration && !editableContent.trimmingCharacters(in: .whitespaces).isEmpty {
             Task {
                 await generateTitleIfNeeded()
             }
@@ -339,7 +403,7 @@ struct DocumentDetailView: View {
         // Generate summary if empty or not yet generated
         let needsSummaryGeneration = document.summary == nil || document.summary?.isEmpty == true
 
-        if needsSummaryGeneration && !document.content.trimmingCharacters(in: .whitespaces).isEmpty {
+        if needsSummaryGeneration && !editableContent.trimmingCharacters(in: .whitespaces).isEmpty {
             Task {
                 await generateSummaryIfNeeded()
             }
@@ -357,10 +421,11 @@ struct DocumentDetailView: View {
 
     private func generateTitleIfNeeded() async {
         do {
-            // Use plain text content for title generation
+            // Strip Markdown from editable content for title generation
+            let plainText = stripMarkdown(from: editableContent)
             let currentTitle = document.title
             let generatedTitle = try await ragEngine.generateTitle(
-                from: document.plainTextContent,
+                from: plainText,
                 documentTitle: currentTitle
             )
 
@@ -383,10 +448,11 @@ struct DocumentDetailView: View {
     }
 
     private func generateSummaryIfNeeded() async {
-        // Use plain text content for summary generation
+        // Strip Markdown from editable content for summary generation
+        let plainText = stripMarkdown(from: editableContent)
         let docTitle = document.title
         let generatedSummary = await ragEngine.generateSummary(
-            from: document.plainTextContent,
+            from: plainText,
             documentTitle: docTitle
         )
 
@@ -397,6 +463,27 @@ struct DocumentDetailView: View {
             }
             try? modelContext.save()
         }
+    }
+
+    // Helper to strip Markdown syntax for clean text
+    private func stripMarkdown(from content: String) -> String {
+        var plainText = content
+
+        // Remove heading markers
+        plainText = plainText.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+
+        // Remove bold/italic markers
+        plainText = plainText.replacingOccurrences(of: #"\*\*\*(.+?)\*\*\*"#, with: "$1", options: .regularExpression)
+        plainText = plainText.replacingOccurrences(of: #"\*\*(.+?)\*\*"#, with: "$1", options: .regularExpression)
+        plainText = plainText.replacingOccurrences(of: #"\*(.+?)\*"#, with: "$1", options: .regularExpression)
+
+        // Remove inline code markers
+        plainText = plainText.replacingOccurrences(of: #"`(.+?)`"#, with: "$1", options: .regularExpression)
+
+        // Remove link syntax but keep text
+        plainText = plainText.replacingOccurrences(of: #"\[(.+?)\]\(.+?\)"#, with: "$1", options: .regularExpression)
+
+        return plainText
     }
 }
 
@@ -455,3 +542,4 @@ struct VersionHistoryView: View {
         .frame(minWidth: 600, minHeight: 400)
     }
 }
+
