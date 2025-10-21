@@ -1,6 +1,15 @@
 {
-  "originHash" : "1dc9a3b765c6179a83fb2728979a5af749e221ed61de44580d582950d1b51309",
+  "originHash" : "a88840684d0c2ca95170c7c423fd2dfcc6f10657f42814bfa6fea8e3101ce3ca",
   "pins" : [
+    {
+      "identity" : "chroma-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/chroma-core/chroma-swift.git",
+      "state" : {
+        "revision" : "0747a133b33eac92a329724b582c609d0ce39858",
+        "version" : "1.0.0"
+      }
+    },
     {
       "identity" : "gzipswift",
       "kind" : "remoteSourceControl",
@@ -8,6 +17,15 @@
       "state" : {
         "revision" : "731037f6cc2be2ec01562f6597c1d0aa3fe6fd05",
         "version" : "6.0.1"
+      }
+    },
+    {
+      "identity" : "jinja",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/johnmai-dev/Jinja",
+      "state" : {
+        "revision" : "5c0a87846dfd36ca6621795ad2f09fdaab82b739",
+        "version" : "1.3.0"
       }
     },
     {
@@ -24,8 +42,17 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift-examples/",
       "state" : {
-        "branch" : "main",
-        "revision" : "95cc51fdfb1f11104e3db48ba7db831a5e098974"
+        "revision" : "24219cd54bdef95f4693f8743264e3d53ffdc12a",
+        "version" : "2.25.6"
+      }
+    },
+    {
+      "identity" : "networkimage",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/gonzalezreal/NetworkImage",
+      "state" : {
+        "revision" : "2849f5323265386e200484b0d0f896e73c3411b9",
+        "version" : "6.0.1"
       }
     },
     {
@@ -33,8 +60,17 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-argument-parser.git",
       "state" : {
-        "revision" : "309a47b2b1d9b5e991f36961c983ecec72275be3",
-        "version" : "1.6.1"
+        "revision" : "0fbc8848e389af3bb55c182bc19ca9d5dc2f255b",
+        "version" : "1.4.0"
+      }
+    },
+    {
+      "identity" : "swift-cmark",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-cmark",
+      "state" : {
+        "revision" : "b97d09472e847a416629f026eceae0e2afcfad65",
+        "version" : "0.7.0"
       }
     },
     {
@@ -47,21 +83,12 @@
       }
     },
     {
-      "identity" : "swift-embeddings",
+      "identity" : "swift-markdown-ui",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/jkrukowski/swift-embeddings.git",
+      "location" : "https://github.com/gonzalezreal/swift-markdown-ui",
       "state" : {
-        "revision" : "bacfe9579302d8d7f4bd581da73b08f8df58486e",
-        "version" : "0.0.21"
-      }
-    },
-    {
-      "identity" : "swift-jinja",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/huggingface/swift-jinja.git",
-      "state" : {
-        "revision" : "c1ef5963ba4a97a589b9c9583ff4ee3352a86d23",
-        "version" : "2.1.0"
+        "revision" : "5f613358148239d0292c0cef674a3c2314737f9e",
+        "version" : "2.4.1"
       }
     },
     {
@@ -74,39 +101,12 @@
       }
     },
     {
-      "identity" : "swift-safetensors",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/jkrukowski/swift-safetensors.git",
-      "state" : {
-        "revision" : "02f8e83e16c3334aaf55fc64fb0ab12e82f527bc",
-        "version" : "0.0.8"
-      }
-    },
-    {
-      "identity" : "swift-sentencepiece",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/jkrukowski/swift-sentencepiece",
-      "state" : {
-        "revision" : "36a8b2b45733f6adb3092100f16e4c7d38a10a7c",
-        "version" : "0.0.6"
-      }
-    },
-    {
       "identity" : "swift-transformers",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-transformers",
       "state" : {
-        "revision" : "a2e184dddb4757bc943e77fbe99ac6786c53f0b2",
-        "version" : "1.0.0"
-      }
-    },
-    {
-      "identity" : "vecturakit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/rryam/VecturaKit.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "0458730601bfe2a1ecd49cd29ce762ad2bbb633b"
+        "revision" : "f000aa7aec0e78acd0211685e4094e1fca84cd8b",
+        "version" : "0.1.24"
       }
     }
   ],

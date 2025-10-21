@@ -14,12 +14,11 @@ struct DocumentListView: View {
     let folder: Folder
     @Binding var selectedDocument: Document?
 
-    @State private var isAddingDocument = false
-    @State private var newDocTitle = ""
     @State private var isImporting = false
+    @State private var hasEnqueuedRendering = false
 
     var sortedDocuments: [Document] {
-        folder.documents.sorted { $0.modifiedAt > $1.modifiedAt }
+        folder.documents.sorted { $0.createdAt > $1.createdAt }  // Sort by creation date, newest first
     }
 
     var body: some View {
@@ -30,49 +29,25 @@ struct DocumentListView: View {
                         Text(document.title)
                             .font(.headline)
 
-                        HStack {
-                            Text(document.modifiedAt, style: .relative)
+                        // Show summary if available
+                        if let summary = document.summary, !summary.isEmpty {
+                            Text(summary)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-
-                            if !document.isProcessed {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.caption)
-                                    .foregroundStyle(.blue)
-                            }
+                                .lineLimit(2)
                         }
                     }
                 }
                 .contextMenu {
                     Button("Delete", systemImage: "trash", role: .destructive) {
-                        deleteDocument(document)
+                        Task {
+                            await deleteDocument(document)
+                        }
                     }
                 }
             }
         }
         .navigationTitle(folder.name)
-        .toolbar {
-            ToolbarItem {
-                Button(action: { isAddingDocument = true }) {
-                    Label("Add Document", systemImage: "doc.badge.plus")
-                }
-            }
-
-            ToolbarItem {
-                Button(action: { isImporting = true }) {
-                    Label("Import", systemImage: "square.and.arrow.down")
-                }
-            }
-        }
-        .alert("New Document", isPresented: $isAddingDocument) {
-            TextField("Document Title", text: $newDocTitle)
-            Button("Cancel", role: .cancel) {
-                newDocTitle = ""
-            }
-            Button("Create") {
-                addDocument()
-            }
-        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.plainText, .text],
@@ -86,26 +61,72 @@ struct DocumentListView: View {
                 isImporting = true
             }
         }
-    }
-
-    private func addDocument() {
-        guard !newDocTitle.isEmpty else { return }
-
-        let document = Document(title: newDocTitle, folder: folder)
-        modelContext.insert(document)
-
-        do {
-            try modelContext.save()
-            selectedDocument = document
-            newDocTitle = ""
-        } catch {
-            print("Error creating document: \(error)")
+        .task {
+            // Proactively enqueue documents for background rendering when list loads
+            await enqueueDocumentsForRendering()
         }
     }
 
-    private func deleteDocument(_ document: Document) {
-        modelContext.delete(document)
-        try? modelContext.save()
+    private func enqueueDocumentsForRendering() async {
+        // Only enqueue once per folder view
+        guard !hasEnqueuedRendering else { return }
+        hasEnqueuedRendering = true
+
+        print("📄 Enqueueing \(sortedDocuments.count) documents for background rendering")
+
+        // Enqueue all documents in this folder for background rendering
+        await MainActor.run {
+            for document in sortedDocuments {
+                let hash = document.calculateContentHash()
+
+                // Enqueue with normal priority (will render in background)
+                MarkdownRenderingPipeline.shared.enqueueRender(
+                    documentId: document.id,
+                    content: document.content,
+                    contentHash: hash,
+                    priority: .normal
+                )
+            }
+        }
+
+        print("📄 Background rendering queue populated")
+    }
+
+    private func deleteDocument(_ document: Document) async {
+        print("🗑️ Deleting document: \(document.title)")
+        print("   - Document type: \(document.effectiveDocumentType.rawValue)")
+        print("   - fileURL: \(document.fileURL?.path ?? "nil")")
+        print("   - originalFileURL: \(document.originalFileURL?.path ?? "nil")")
+
+        // Delete associated files from iCloud Drive first
+        do {
+            // Delete extracted text file (markdown file)
+            if let fileURL = document.fileURL {
+                try await FileStorageManager.shared.deleteFile(at: fileURL)
+                print("✅ Deleted extracted text file: \(fileURL.lastPathComponent)")
+            } else {
+                print("⚠️ No extracted text file to delete")
+            }
+
+            // Delete original file (for imported PDFs, EPUBs, etc.)
+            if let originalFileURL = document.originalFileURL {
+                try await FileStorageManager.shared.deleteFile(at: originalFileURL)
+                print("✅ Deleted original file: \(originalFileURL.lastPathComponent)")
+            } else {
+                print("⚠️ No original file to delete")
+            }
+        } catch {
+            print("❌ Failed to delete files: \(error)")
+            // Continue with document deletion even if file deletion fails
+        }
+
+        // Delete document from SwiftData
+        await MainActor.run {
+            modelContext.delete(document)
+            try? modelContext.save()
+        }
+
+        print("✅ Deleted document from database: \(document.title)")
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {
@@ -125,23 +146,37 @@ struct DocumentListView: View {
             defer { url.stopAccessingSecurityScopedResource() }
 
             do {
-                let content = try String(contentsOf: url, encoding: .utf8)
                 let title = url.deletingPathExtension().lastPathComponent
+                let fileName = url.lastPathComponent
 
-                await MainActor.run {
-                    let document = Document(
+                // Copy file to iCloud Drive folder matching this sidebar folder
+                let folderName = folder.iCloudPath ?? folder.name
+                let fileURL = try await FileStorageManager.shared.copyFileToiCloud(
+                    from: url,
+                    toFolder: folderName,
+                    fileName: fileName
+                )
+
+                print("✅ Imported file to iCloud: \(fileURL.path)")
+
+                let documentID = await MainActor.run {
+                    // Create file-backed document
+                    let doc = Document(
                         title: title,
-                        content: content,
+                        fileURL: fileURL,
+                        fileName: fileName,
                         folder: folder
                     )
 
-                    modelContext.insert(document)
+                    modelContext.insert(doc)
                     try? modelContext.save()
+                    return doc.persistentModelID
+                }
 
-                    // Trigger processing pipeline
-                    Task {
-                        await ProcessingPipeline.shared.processDocument(document)
-                    }
+                // Trigger processing pipeline in background to avoid UI freeze
+                let cancellationToken = CancellationToken()
+                Task.detached(priority: .utility) {
+                    await ProcessingPipeline.shared.processDocument(documentID: documentID, cancellationToken: cancellationToken)
                 }
 
             } catch {
