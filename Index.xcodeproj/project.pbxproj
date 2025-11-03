@@ -10,6 +10,7 @@
 		29A7729C2E9CF25E0065BA73 /* ChromaSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 29A7729B2E9CF25E0065BA73 /* ChromaSwift */; };
 		29D678552E9DC1DE0066B593 /* IndexIcons.icon in Resources */ = {isa = PBXBuildFile; fileRef = 29D678542E9DC1DE0066B593 /* IndexIcons.icon */; };
 		C977CB2A2E991C00001E383A /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = C977CB292E991C00001E383A /* MarkdownUI */; };
+		C9AB74322EB8F4870091B2B4 /* EPUBKit in Frameworks */ = {isa = PBXBuildFile; productRef = C9AB74312EB8F4870091B2B4 /* EPUBKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C9AB74322EB8F4870091B2B4 /* EPUBKit in Frameworks */,
 				29A7729C2E9CF25E0065BA73 /* ChromaSwift in Frameworks */,
 				C977CB2A2E991C00001E383A /* MarkdownUI in Frameworks */,
 			);
@@ -124,6 +126,7 @@
 			packageProductDependencies = (
 				C977CB292E991C00001E383A /* MarkdownUI */,
 				29A7729B2E9CF25E0065BA73 /* ChromaSwift */,
+				C9AB74312EB8F4870091B2B4 /* EPUBKit */,
 			);
 			productName = Index;
 			productReference = C977CAD42E990B68001E383A /* Index.app */;
@@ -213,6 +216,7 @@
 			packageReferences = (
 				C977CB2B2E991C00001E383A /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				29A7729A2E9CF25E0065BA73 /* XCRemoteSwiftPackageReference "chroma-swift" */,
+				C9AB74302EB8F4870091B2B4 /* XCRemoteSwiftPackageReference "EPUBKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C977CAD52E990B68001E383A /* Products */;
@@ -687,6 +691,14 @@
 				minimumVersion = 2.4.1;
 			};
 		};
+		C9AB74302EB8F4870091B2B4 /* XCRemoteSwiftPackageReference "EPUBKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/witekbobrowski/EPUBKit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.4.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -699,6 +711,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C977CB2B2E991C00001E383A /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
 			productName = MarkdownUI;
+		};
+		C9AB74312EB8F4870091B2B4 /* EPUBKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C9AB74302EB8F4870091B2B4 /* XCRemoteSwiftPackageReference "EPUBKit" */;
+			productName = EPUBKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

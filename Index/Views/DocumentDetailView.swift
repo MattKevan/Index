@@ -28,6 +28,9 @@ struct DocumentDetailView: View {
     // PDF view mode
     @State private var pdfViewMode: PDFViewMode = .pdf
 
+    // EPUB view mode
+    @State private var epubViewMode: EPUBViewMode = .text
+
     // Transformation mode state
     @State private var selectedTransformPreset: TransformationPreset?
     @State private var needsTransformRegeneration = false
@@ -76,8 +79,27 @@ struct DocumentDetailView: View {
                         }
                     }
             case .epub:
-                // Future: EPUBDocumentView(document: document)
-                unsupportedDocumentView(type: "EPUB")
+                EPUBDocumentView(document: document, viewMode: $epubViewMode)
+                    .toolbar {
+                        ToolbarItem {
+                            // EPUB view mode toggle
+                            Picker("View Mode", selection: $epubViewMode) {
+                                Text("EPUB").tag(EPUBViewMode.epub)
+                                Text("Text").tag(EPUBViewMode.text)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 140)
+                        }
+
+                        ToolbarItem {
+                            Button(action: {
+                                openEPUBExternally()
+                            }) {
+                                Label("Open Externally", systemImage: "arrow.up.forward.app")
+                            }
+                            .help("Open EPUB in external reader")
+                        }
+                    }
             case .docx:
                 // Future: DOCXDocumentView(document: document)
                 unsupportedDocumentView(type: "DOCX")
@@ -580,6 +602,17 @@ struct DocumentDetailView: View {
 
         NSWorkspace.shared.open(originalFileURL)
         print("📄 Opening PDF in Preview: \(originalFileURL.lastPathComponent)")
+    }
+
+    // Open EPUB in external reader (Books.app or other)
+    private func openEPUBExternally() {
+        guard let originalFileURL = document.originalFileURL else {
+            print("⚠️ No original EPUB file URL available")
+            return
+        }
+
+        NSWorkspace.shared.open(originalFileURL)
+        print("📚 Opening EPUB externally: \(originalFileURL.lastPathComponent)")
     }
 }
 

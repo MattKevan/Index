@@ -120,34 +120,50 @@ actor ProcessingPipeline {
                 ProcessingQueue.shared.updateProgress(id: taskID, current: 2, total: 3, status: "Generating embeddings...")
             }
 
-            // 2. Store in vector DB (ChromaDB handles embedding internally)
+            // 2. Store in vector DB in batches to avoid UI freeze
             do {
-                let texts = chunks.map { $0.content }
-                let embeddingIDs = try await vectorDB.addDocuments(texts: texts)
+                let batchSize = 50  // Process 50 chunks at a time
+                let totalChunks = chunks.count
+                var allEmbeddingIDs: [UUID] = []
 
-                print("   Generated embeddings and stored \(embeddingIDs.count) chunks in vector DB")
+                print("   Processing \(totalChunks) chunks in batches of \(batchSize)...")
 
-                // 3. Update chunks with their embedding IDs
-                for (index, chunk) in chunks.enumerated() {
-                    chunk.embeddingID = embeddingIDs[index].uuidString
+                for batchStart in stride(from: 0, to: totalChunks, by: batchSize) {
+                    let batchEnd = min(batchStart + batchSize, totalChunks)
+                    let batchChunks = Array(chunks[batchStart..<batchEnd])
+                    let texts = batchChunks.map { $0.content }
 
-                    // Report progress periodically
-                    if index % 5 == 0 {
-                        await MainActor.run {
-                            ProcessingQueue.shared.updateProgress(
-                                id: taskID,
-                                current: 2,
-                                total: 3,
-                                status: "Processing chunk \(index + 1) of \(chunks.count)"
-                            )
-                        }
+                    // Generate embeddings for this batch
+                    let embeddingIDs = try await vectorDB.addDocuments(texts: texts)
+                    allEmbeddingIDs.append(contentsOf: embeddingIDs)
+
+                    // Update progress
+                    await MainActor.run {
+                        ProcessingQueue.shared.updateProgress(
+                            id: taskID,
+                            current: 2,
+                            total: 3,
+                            status: "Embedding \(batchEnd)/\(totalChunks) chunks..."
+                        )
                     }
+
+                    print("   ✓ Batch \(batchStart + 1)-\(batchEnd) complete")
 
                     // Check for cancellation
                     if cancellationToken?.isCancelled == true {
                         print("⚠️ Processing cancelled: \(docTitle)")
                         return
                     }
+
+                    // Small delay to let UI breathe
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+
+                print("   Generated embeddings and stored \(allEmbeddingIDs.count) chunks in vector DB")
+
+                // 3. Update chunks with their embedding IDs
+                for (index, chunk) in chunks.enumerated() {
+                    chunk.embeddingID = allEmbeddingIDs[index].uuidString
                 }
             } catch {
                 print("⚠️ Failed to generate embeddings: \(error)")

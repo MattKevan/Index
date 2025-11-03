@@ -15,48 +15,54 @@ actor DocumentImporter {
 
     private let fileStorage = FileStorageManager.shared
     private let pdfExtractor = PDFTextExtractor.shared
+    private let epubExtractor = EPUBTextExtractor.shared
 
     private init() {}
 
     // MARK: - Import Methods
 
-    /// Import a document file into the specified folder
+    /// Import a document file that's already in iCloud (used by FileSync)
     /// - Parameters:
-    ///   - sourceURL: URL of the file to import
+    ///   - iCloudURL: URL of the file already in iCloud
     ///   - folder: Target folder for the document
     ///   - context: SwiftData model context
     /// - Returns: Created Document model
     /// - Throws: ImportError if import fails
-    func importDocument(from sourceURL: URL, toFolder folder: Folder, context: ModelContext) async throws -> Document {
+    func importExistingFile(from iCloudURL: URL, toFolder folder: Folder, context: ModelContext) async throws -> Document {
         // Detect document type
-        let documentType = try detectDocumentType(for: sourceURL)
+        let documentType = try detectDocumentType(for: iCloudURL)
 
-        guard documentType == .pdf else {
-            throw ImportError.unsupportedFileType(message: "Only PDF files are currently supported. EPUB and DOCX support coming soon.")
+        guard documentType == .pdf || documentType == .epub else {
+            throw ImportError.unsupportedFileType(message: "Only PDF and EPUB files are currently supported. DOCX support coming soon.")
         }
 
         // Generate unique title from filename
-        let title = sourceURL.deletingPathExtension().lastPathComponent
+        let title = iCloudURL.deletingPathExtension().lastPathComponent
 
-        print("📥 Importing \(documentType.rawValue.uppercased()): \(title)")
+        print("📥 Processing existing \(documentType.rawValue.uppercased()) in iCloud: \(title)")
 
-        // Copy original file to iCloud
-        let originalFileName = sourceURL.lastPathComponent
-        let originalFileURL = try await fileStorage.copyFileToiCloud(
-            from: sourceURL,
-            toFolder: folder.name,
-            fileName: originalFileName
-        )
+        // File is already in iCloud, just use it as-is
+        let originalFileName = iCloudURL.lastPathComponent
+        let originalFileURL = iCloudURL
 
-        print("✅ Copied original file to iCloud: \(originalFileURL.path)")
-
-        // Extract text based on document type
+        // Extract text and metadata based on document type
         let extractedText: String
+        var metadata: EPUBMetadata? = nil
+
         switch documentType {
         case .pdf:
-            extractedText = try await pdfExtractor.extractText(from: sourceURL)
-        case .epub, .docx:
-            throw ImportError.unsupportedFileType(message: "EPUB and DOCX support coming in Phase 2")
+            extractedText = try await pdfExtractor.extractText(from: iCloudURL)
+        case .epub:
+            let result = try await epubExtractor.extractTextAndMetadata(from: iCloudURL)
+            extractedText = result.text
+            metadata = result.metadata
+            print("📚 EPUB Metadata:")
+            if let title = metadata?.title { print("   Title: \(title)") }
+            if let author = metadata?.author { print("   Author: \(author)") }
+            if let publisher = metadata?.publisher { print("   Publisher: \(publisher)") }
+            if let description = metadata?.description { print("   Description: \(description.prefix(100))...") }
+        case .docx:
+            throw ImportError.unsupportedFileType(message: "DOCX support coming in Phase 2")
         case .markdown, .plainText:
             throw ImportError.unsupportedFileType(message: "Use the 'New Document' button for markdown files")
         }
@@ -81,6 +87,126 @@ actor DocumentImporter {
             extractedTextFileName: extractedFileName,
             folder: folder
         )
+
+        // Set metadata fields if available
+        if let metadata = metadata {
+            document.author = metadata.author
+            document.publisher = metadata.publisher
+            document.language = metadata.language
+
+            // Use EPUB description as initial summary if available (strip HTML)
+            if let description = metadata.description {
+                let cleanSummary = stripHTMLTags(from: description)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if !cleanSummary.isEmpty {
+                    document.summary = cleanSummary
+                    print("✅ Using EPUB description as summary: \(cleanSummary.prefix(100))...")
+                }
+            }
+        }
+
+        // Add to context
+        context.insert(document)
+
+        // Save context
+        try context.save()
+
+        print("✅ Document processed successfully: \(title)")
+
+        return document
+    }
+
+    /// Import a document file into the specified folder
+    /// - Parameters:
+    ///   - sourceURL: URL of the file to import
+    ///   - folder: Target folder for the document
+    ///   - context: SwiftData model context
+    /// - Returns: Created Document model
+    /// - Throws: ImportError if import fails
+    func importDocument(from sourceURL: URL, toFolder folder: Folder, context: ModelContext) async throws -> Document {
+        // Detect document type
+        let documentType = try detectDocumentType(for: sourceURL)
+
+        guard documentType == .pdf || documentType == .epub else {
+            throw ImportError.unsupportedFileType(message: "Only PDF and EPUB files are currently supported. DOCX support coming soon.")
+        }
+
+        // Generate unique title from filename
+        let title = sourceURL.deletingPathExtension().lastPathComponent
+
+        print("📥 Importing \(documentType.rawValue.uppercased()): \(title)")
+
+        // Copy original file to iCloud
+        let originalFileName = sourceURL.lastPathComponent
+        let originalFileURL = try await fileStorage.copyFileToiCloud(
+            from: sourceURL,
+            toFolder: folder.name,
+            fileName: originalFileName
+        )
+
+        print("✅ Copied original file to iCloud: \(originalFileURL.path)")
+
+        // Extract text and metadata based on document type
+        let extractedText: String
+        var metadata: EPUBMetadata? = nil
+
+        switch documentType {
+        case .pdf:
+            extractedText = try await pdfExtractor.extractText(from: sourceURL)
+        case .epub:
+            let result = try await epubExtractor.extractTextAndMetadata(from: sourceURL)
+            extractedText = result.text
+            metadata = result.metadata
+            print("📚 EPUB Metadata:")
+            if let title = metadata?.title { print("   Title: \(title)") }
+            if let author = metadata?.author { print("   Author: \(author)") }
+            if let publisher = metadata?.publisher { print("   Publisher: \(publisher)") }
+            if let description = metadata?.description { print("   Description: \(description.prefix(100))...") }
+        case .docx:
+            throw ImportError.unsupportedFileType(message: "DOCX support coming in Phase 2")
+        case .markdown, .plainText:
+            throw ImportError.unsupportedFileType(message: "Use the 'New Document' button for markdown files")
+        }
+
+        // Create extracted text file in iCloud
+        let extractedFileName = "\(title).md"
+        let extractedTextURL = try await createExtractedTextFile(
+            content: extractedText,
+            fileName: extractedFileName,
+            folderName: folder.name
+        )
+
+        print("✅ Created extracted text file: \(extractedTextURL.path)")
+
+        // Create Document model
+        let document = Document(
+            title: title,
+            documentType: documentType,
+            originalFileURL: originalFileURL,
+            originalFileName: originalFileName,
+            extractedTextURL: extractedTextURL,
+            extractedTextFileName: extractedFileName,
+            folder: folder
+        )
+
+        // Set metadata fields if available
+        if let metadata = metadata {
+            document.author = metadata.author
+            document.publisher = metadata.publisher
+            document.language = metadata.language
+
+            // Use EPUB description as initial summary if available (strip HTML)
+            if let description = metadata.description {
+                let cleanSummary = stripHTMLTags(from: description)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if !cleanSummary.isEmpty {
+                    document.summary = cleanSummary
+                    print("✅ Using EPUB description as summary: \(cleanSummary.prefix(100))...")
+                }
+            }
+        }
 
         // Add to context
         context.insert(document)
@@ -198,8 +324,8 @@ actor DocumentImporter {
     static func supportedUTTypes() -> [UTType] {
         return [
             .pdf,
+            UTType(filenameExtension: "epub") ?? .data,
             // Future support:
-            // UTType(filenameExtension: "epub") ?? .data,
             // UTType(filenameExtension: "docx") ?? .data
         ]
     }
@@ -207,8 +333,46 @@ actor DocumentImporter {
     /// Get human-readable list of supported formats
     /// - Returns: String describing supported formats
     static func supportedFormatsDescription() -> String {
-        return "PDF documents"
+        return "PDF and EPUB documents"
         // Future: "PDF, EPUB, and DOCX documents"
+    }
+
+    // MARK: - Helpers
+
+    /// Strip HTML tags from text
+    /// - Parameter html: HTML text
+    /// - Returns: Plain text with HTML tags removed
+    private func stripHTMLTags(from html: String) -> String {
+        var text = html
+
+        // Remove all HTML tags
+        text = text.replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+
+        // Decode common HTML entities
+        let entities: [String: String] = [
+            "&amp;": "&",
+            "&lt;": "<",
+            "&gt;": ">",
+            "&quot;": "\"",
+            "&apos;": "'",
+            "&nbsp;": " ",
+            "&mdash;": "—",
+            "&ndash;": "–",
+            "&ldquo;": "\u{201C}",
+            "&rdquo;": "\u{201D}",
+            "&lsquo;": "\u{2018}",
+            "&rsquo;": "\u{2019}",
+            "&hellip;": "…"
+        ]
+
+        for (entity, replacement) in entities {
+            text = text.replacingOccurrences(of: entity, with: replacement)
+        }
+
+        // Replace multiple whitespaces/newlines with single space
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

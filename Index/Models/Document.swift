@@ -40,6 +40,11 @@ final class Document {
     // AI-generated one-sentence summary for document list preview
     var summary: String?
 
+    // Metadata fields (for imported documents like PDFs/EPUBs)
+    var author: String?       // Author name
+    var publisher: String?    // Publisher name
+    var language: String?     // Language code (e.g., "en", "es")
+
     // Hash of content when last rendered (for cache invalidation)
     var contentHash: String?
 

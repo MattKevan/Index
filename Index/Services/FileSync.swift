@@ -89,33 +89,65 @@ actor FileSync {
         modelContext: ModelContext
     ) async {
         // Create a set of filenames that exist in the database
+        // For PDFs, check against the original file name since they get renamed to .md
+        let dbOriginalFileNames = Set(documentsInDB.compactMap { $0.originalFileName })
         let dbFileNames = Set(documentsInDB.compactMap { $0.fileName })
+        let allDbFileNames = dbFileNames.union(dbOriginalFileNames)
 
         // Find files in iCloud that aren't in the database
-        let newFiles = filesInCloud.filter { !dbFileNames.contains($0.fileName) }
+        let newFiles = filesInCloud.filter { !allDbFileNames.contains($0.fileName) }
 
         if !newFiles.isEmpty {
             print("   ➕ Found \(newFiles.count) new files")
 
             for fileMetadata in newFiles {
-                // Create new document for this file
-                let title = fileMetadata.url.deletingPathExtension().lastPathComponent
+                let fileExtension = fileMetadata.url.pathExtension.lowercased()
 
-                let document = Document(
-                    title: title,
-                    fileURL: fileMetadata.url,
-                    fileName: fileMetadata.fileName,
-                    folder: folder
-                )
+                // Handle different file types
+                switch fileExtension {
+                case "md", "markdown":
+                    // Create new document for this markdown file
+                    let title = fileMetadata.url.deletingPathExtension().lastPathComponent
 
-                modelContext.insert(document)
-                print("      • Added: \(fileMetadata.fileName)")
+                    let document = Document(
+                        title: title,
+                        fileURL: fileMetadata.url,
+                        fileName: fileMetadata.fileName,
+                        folder: folder
+                    )
 
-                // Trigger processing
-                try? modelContext.save()
-                let documentID = document.persistentModelID
-                Task.detached(priority: .utility) {
-                    await ProcessingPipeline.shared.processDocument(documentID: documentID, cancellationToken: nil)
+                    modelContext.insert(document)
+                    print("      • Added: \(fileMetadata.fileName)")
+
+                    // Trigger processing
+                    try? modelContext.save()
+                    let documentID = document.persistentModelID
+                    Task.detached(priority: .utility) {
+                        await ProcessingPipeline.shared.processDocument(documentID: documentID, cancellationToken: nil)
+                    }
+
+                case "pdf", "epub":
+                    // Import PDF/EPUB using DocumentImporter which handles text extraction
+                    do {
+                        let fileType = fileExtension.uppercased()
+                        print("      • Importing \(fileType): \(fileMetadata.fileName)")
+                        let document = try await DocumentImporter.shared.importExistingFile(
+                            from: fileMetadata.url,
+                            toFolder: folder,
+                            context: modelContext
+                        )
+
+                        // Trigger processing for embeddings
+                        let documentID = document.persistentModelID
+                        Task.detached(priority: .utility) {
+                            await ProcessingPipeline.shared.processDocument(documentID: documentID, cancellationToken: nil)
+                        }
+                    } catch {
+                        print("      ❌ Failed to import \(fileMetadata.fileName): \(error.localizedDescription)")
+                    }
+
+                default:
+                    print("      ⚠️ Skipping unsupported file type: \(fileMetadata.fileName)")
                 }
             }
 
