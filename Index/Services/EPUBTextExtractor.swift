@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import EPUBKit
 
 /// Metadata extracted from EPUB files
 struct EPUBMetadata {
@@ -35,7 +36,7 @@ struct EPUBMetadata {
 }
 
 /// Actor-isolated service for extracting text from EPUB documents
-/// Uses native ZIP extraction and XML parsing
+/// Uses EPUBKit for parsing and native Swift for text extraction
 actor EPUBTextExtractor {
     static let shared = EPUBTextExtractor()
 
@@ -53,56 +54,53 @@ actor EPUBTextExtractor {
         return (text, metadata)
     }
 
-    /// Extract text from an EPUB file
+    /// Extract text from an EPUB file using EPUBKit
     /// - Parameter url: URL to the EPUB file
     /// - Returns: Extracted text in markdown format with chapter separators
     /// - Throws: EPUBExtractionError if extraction fails
     func extractText(from url: URL) async throws -> String {
-        // Create temporary directory for extraction
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
+        print("📖 Parsing EPUB with EPUBKit: \(url.lastPathComponent)")
 
-        defer {
-            try? FileManager.default.removeItem(at: tempDir)
+        // Parse EPUB using EPUBKit
+        guard let document = EPUBDocument(url: url) else {
+            print("❌ EPUBKit failed to parse document")
+            throw EPUBExtractionError.invalidEPUB
         }
 
-        // Extract EPUB (ZIP) to temp directory
-        try await extractEPUB(from: url, to: tempDir)
-
-        // Parse container.xml to find content.opf location
-        let opfPath = try await parseContainer(in: tempDir)
-
-        // Parse content.opf to get spine and manifest
-        let (spine, manifest) = try await parseContentOPF(at: tempDir.appendingPathComponent(opfPath))
+        print("✅ EPUBKit parsed document: \(document.title ?? "Untitled")")
+        print("   Author: \(document.author ?? "Unknown")")
+        print("   Spine items: \(document.spine.items.count)")
 
         // Extract text from spine items in order
         var extractedText = ""
         var successfulChapters = 0
 
-        for (index, spineItem) in spine.enumerated() {
-            guard let manifestItem = manifest[spineItem] else {
-                print("⚠️ Could not find manifest item for spine item: \(spineItem)")
+        for (index, spineItem) in document.spine.items.enumerated() {
+            // Get the manifest item for this spine item
+            guard let manifestItem = document.manifest.items.first(where: { $0.id == spineItem.idref }) else {
+                print("⚠️ Chapter \(index + 1): No manifest item for spine idref '\(spineItem.idref)'")
                 continue
             }
 
-            do {
-                let chapterText = try await extractChapterText(
-                    from: tempDir,
-                    opfBasePath: (opfPath as NSString).deletingLastPathComponent,
-                    manifestItem: manifestItem,
-                    chapterNumber: index + 1
-                )
+            // Read the chapter file
+            guard let chapterData = document.data(for: manifestItem),
+                  let chapterHTML = String(data: chapterData, encoding: .utf8) else {
+                print("⚠️ Chapter \(index + 1): Failed to read data for \(manifestItem.href)")
+                continue
+            }
 
-                if !chapterText.isEmpty {
-                    if successfulChapters > 0 {
-                        extractedText += "\n\n---\n\n"
-                    }
-                    extractedText += chapterText
-                    extractedText += "\n"
-                    successfulChapters += 1
+            // Convert HTML to markdown
+            let chapterText = cleanHTML(chapterHTML)
+
+            if !chapterText.isEmpty {
+                if successfulChapters > 0 {
+                    extractedText += "\n\n---\n\n"
                 }
-            } catch {
-                print("⚠️ Failed to extract chapter \(index + 1): \(error)")
+                extractedText += "## Chapter \(index + 1)\n\n"
+                extractedText += chapterText
+                extractedText += "\n"
+                successfulChapters += 1
+                print("   ✓ Chapter \(index + 1): Extracted \(chapterText.count) characters")
             }
         }
 
@@ -110,186 +108,8 @@ actor EPUBTextExtractor {
             throw EPUBExtractionError.noTextFound(message: "EPUB appears to have no readable text content.")
         }
 
-        print("✅ Extracted text from \(successfulChapters)/\(spine.count) chapters")
+        print("✅ Extracted text from \(successfulChapters)/\(document.spine.items.count) chapters")
         return extractedText
-    }
-
-    // MARK: - EPUB Extraction
-
-    /// Extract EPUB ZIP archive to temporary directory
-    private func extractEPUB(from epubURL: URL, to destinationURL: URL) async throws {
-        print("📦 Extracting EPUB from: \(epubURL.path)")
-        print("📦 Extracting to: \(destinationURL.path)")
-
-        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
-
-        // Use macOS native unzip command
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = ["-q", "-o", epubURL.path, "-d", destinationURL.path]
-
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            print("❌ Unzip failed with status: \(process.terminationStatus)")
-            throw EPUBExtractionError.invalidEPUB
-        }
-
-        // List extracted contents for debugging
-        if let contents = try? FileManager.default.contentsOfDirectory(atPath: destinationURL.path) {
-            print("✅ Extracted \(contents.count) items: \(contents.prefix(5))")
-        }
-    }
-
-    // MARK: - XML Parsing
-
-    /// Parse container.xml to find content.opf location
-    private func parseContainer(in epubDir: URL) async throws -> String {
-        let containerPath = epubDir
-            .appendingPathComponent("META-INF")
-            .appendingPathComponent("container.xml")
-
-        print("📖 Looking for container.xml at: \(containerPath.path)")
-
-        guard FileManager.default.fileExists(atPath: containerPath.path) else {
-            print("❌ container.xml not found at path")
-            throw EPUBExtractionError.noContentFound
-        }
-
-        guard let data = try? Data(contentsOf: containerPath),
-              let xmlString = String(data: data, encoding: .utf8) else {
-            print("❌ Failed to read container.xml")
-            throw EPUBExtractionError.noContentFound
-        }
-
-        print("📄 Container.xml content preview: \(xmlString.prefix(200))")
-
-        // Use NSRegularExpression for more reliable parsing
-        let pattern = #"full-path\s*=\s*"([^"]+)""#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: xmlString, range: NSRange(xmlString.startIndex..., in: xmlString)),
-              let pathRange = Range(match.range(at: 1), in: xmlString) else {
-            print("❌ Could not find full-path attribute in container.xml")
-            throw EPUBExtractionError.noContentFound
-        }
-
-        let path = String(xmlString[pathRange])
-        print("✅ Found content.opf path: \(path)")
-        return path
-    }
-
-    /// Parse content.opf to get spine and manifest
-    private func parseContentOPF(at opfURL: URL) async throws -> (spine: [String], manifest: [String: String]) {
-        print("📖 Reading content.opf at: \(opfURL.path)")
-
-        guard FileManager.default.fileExists(atPath: opfURL.path) else {
-            print("❌ content.opf not found")
-            throw EPUBExtractionError.noContentFound
-        }
-
-        guard let data = try? Data(contentsOf: opfURL),
-              let xmlString = String(data: data, encoding: .utf8) else {
-            print("❌ Failed to read content.opf")
-            throw EPUBExtractionError.noContentFound
-        }
-
-        print("📄 Content.opf preview: \(xmlString.prefix(300))")
-
-        // Parse manifest items (id -> href mapping)
-        var manifest: [String: String] = [:]
-
-        // Try both id-first and href-first patterns
-        let patterns = [
-            #"<item[^>]+id="([^"]+)"[^>]+href="([^"]+)""#,
-            #"<item[^>]+href="([^"]+)"[^>]+id="([^"]+)""#
-        ]
-
-        for (index, manifestPattern) in patterns.enumerated() {
-            if let regex = try? NSRegularExpression(pattern: manifestPattern, options: []) {
-                let range = NSRange(xmlString.startIndex..., in: xmlString)
-                regex.enumerateMatches(in: xmlString, range: range) { match, _, _ in
-                    guard let match = match,
-                          match.numberOfRanges == 3,
-                          let firstRange = Range(match.range(at: 1), in: xmlString),
-                          let secondRange = Range(match.range(at: 2), in: xmlString) else {
-                        return
-                    }
-
-                    let first = String(xmlString[firstRange])
-                    let second = String(xmlString[secondRange])
-
-                    // First pattern: id, href
-                    // Second pattern: href, id
-                    if index == 0 {
-                        manifest[first] = second
-                    } else {
-                        manifest[second] = first
-                    }
-                }
-            }
-            if !manifest.isEmpty { break }
-        }
-
-        print("📚 Found \(manifest.count) manifest items")
-
-        // Parse spine itemrefs (reading order)
-        var spine: [String] = []
-        let spinePattern = #"<itemref[^>]+idref="([^"]+)""#
-
-        if let regex = try? NSRegularExpression(pattern: spinePattern, options: []) {
-            let range = NSRange(xmlString.startIndex..., in: xmlString)
-            regex.enumerateMatches(in: xmlString, range: range) { match, _, _ in
-                guard let match = match,
-                      match.numberOfRanges == 2,
-                      let idrefRange = Range(match.range(at: 1), in: xmlString) else {
-                    return
-                }
-
-                let idref = String(xmlString[idrefRange])
-                spine.append(idref)
-            }
-        }
-
-        print("📖 Found \(spine.count) spine items: \(spine.prefix(5))")
-
-        if spine.isEmpty || manifest.isEmpty {
-            print("❌ Spine or manifest is empty")
-            print("   Spine items: \(spine.count)")
-            print("   Manifest items: \(manifest.count)")
-            throw EPUBExtractionError.noContentFound
-        }
-
-        return (spine, manifest)
-    }
-
-    // MARK: - Chapter Extraction
-
-    /// Extract text from a single chapter
-    private func extractChapterText(
-        from epubDir: URL,
-        opfBasePath: String,
-        manifestItem: String,
-        chapterNumber: Int
-    ) async throws -> String {
-        // Build full path to chapter file
-        var chapterPath = epubDir
-        if !opfBasePath.isEmpty && opfBasePath != "." {
-            chapterPath = chapterPath.appendingPathComponent(opfBasePath)
-        }
-        chapterPath = chapterPath.appendingPathComponent(manifestItem)
-
-        // Read chapter HTML/XHTML
-        guard let data = try? Data(contentsOf: chapterPath),
-              let htmlString = String(data: data, encoding: .utf8) else {
-            throw EPUBExtractionError.chapterReadFailed
-        }
-
-        // Clean HTML and convert to text
-        let cleanedText = cleanHTML(htmlString)
-
-        // Add chapter header
-        return "## Chapter \(chapterNumber)\n\n\(cleanedText)"
     }
 
     // MARK: - HTML Cleaning
@@ -430,140 +250,25 @@ actor EPUBTextExtractor {
 
     // MARK: - Metadata Extraction
 
-    /// Extract metadata from EPUB file
+    /// Extract metadata from EPUB file using EPUBKit
     func extractMetadata(from url: URL) async throws -> EPUBMetadata {
-        // Create temporary directory for extraction
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-
-        defer {
-            try? FileManager.default.removeItem(at: tempDir)
+        // Parse EPUB using EPUBKit
+        guard let document = EPUBDocument(url: url) else {
+            throw EPUBExtractionError.invalidEPUB
         }
 
-        // Extract EPUB
-        try await extractEPUB(from: url, to: tempDir)
-
-        // Parse container.xml
-        let opfPath = try await parseContainer(in: tempDir)
-
-        // Read content.opf
-        let opfURL = tempDir.appendingPathComponent(opfPath)
-        guard let data = try? Data(contentsOf: opfURL),
-              let xmlString = String(data: data, encoding: .utf8) else {
-            throw EPUBExtractionError.noContentFound
-        }
-
-        // Extract metadata using regex
-        func extractMetadataTag(tag: String) -> String? {
-            let pattern = "<dc:\(tag)[^>]*>([^<]+)</dc:\(tag)>"
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-               let match = regex.firstMatch(in: xmlString, range: NSRange(xmlString.startIndex..., in: xmlString)),
-               let contentRange = Range(match.range(at: 1), in: xmlString) {
-                let rawValue = String(xmlString[contentRange])
-                return decodeHTMLEntities(rawValue).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            return nil
-        }
-
+        // Extract metadata from EPUBKit document
         return EPUBMetadata(
-            title: extractMetadataTag(tag: "title"),
-            author: extractMetadataTag(tag: "creator"),
-            description: extractMetadataTag(tag: "description"),
-            publisher: extractMetadataTag(tag: "publisher"),
-            language: extractMetadataTag(tag: "language")
-        )
-    }
-
-    /// Extract text with detailed metadata about extraction quality
-    func extractTextWithMetadata(from url: URL) async throws -> EPUBExtractionResult {
-        let text = try await extractText(from: url)
-
-        // Count chapters by counting "---" separators
-        let chapterCount = text.components(separatedBy: "\n---\n").count
-
-        return EPUBExtractionResult(
-            text: text,
-            chapterCount: chapterCount,
-            chaptersWithText: chapterCount,
-            chaptersWithoutText: 0,
-            totalCharacters: text.count,
-            quality: ExtractionQuality.excellent
-        )
-    }
-
-    /// Get basic information about an EPUB file
-    func getEPUBInfo(from url: URL) async throws -> EPUBInfo {
-        // Create temporary directory for extraction
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-
-        defer {
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
-        // Extract EPUB
-        try await extractEPUB(from: url, to: tempDir)
-
-        // Parse container.xml
-        let opfPath = try await parseContainer(in: tempDir)
-
-        // Read content.opf
-        let opfURL = tempDir.appendingPathComponent(opfPath)
-        guard let data = try? Data(contentsOf: opfURL),
-              let xmlString = String(data: data, encoding: .utf8) else {
-            throw EPUBExtractionError.noContentFound
-        }
-
-        // Extract metadata using regex
-        func extractMetadata(tag: String) -> String? {
-            let pattern = "<dc:\(tag)[^>]*>([^<]+)</dc:\(tag)>"
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-               let match = regex.firstMatch(in: xmlString, range: NSRange(xmlString.startIndex..., in: xmlString)),
-               let contentRange = Range(match.range(at: 1), in: xmlString) {
-                return String(xmlString[contentRange])
-            }
-            return nil
-        }
-
-        let title = extractMetadata(tag: "title")
-        let author = extractMetadata(tag: "creator")
-        let publisher = extractMetadata(tag: "publisher")
-        let language = extractMetadata(tag: "language")
-        let identifier = extractMetadata(tag: "identifier")
-
-        // Count spine items
-        let spineCount = xmlString.components(separatedBy: "<itemref").count - 1
-
-        return EPUBInfo(
-            chapterCount: spineCount,
-            title: title,
-            author: author,
-            publisher: publisher,
-            language: language,
-            identifier: identifier
+            title: document.title,
+            author: document.author,
+            description: document.metadata.description,
+            publisher: document.metadata.publisher,
+            language: document.metadata.language
         )
     }
 }
 
 // MARK: - Data Types
-
-struct EPUBExtractionResult {
-    let text: String
-    let chapterCount: Int
-    let chaptersWithText: Int
-    let chaptersWithoutText: Int
-    let totalCharacters: Int
-    let quality: ExtractionQuality
-}
-
-struct EPUBInfo {
-    let chapterCount: Int
-    let title: String?
-    let author: String?
-    let publisher: String?
-    let language: String?
-    let identifier: String?
-}
 
 enum EPUBExtractionError: Error, LocalizedError {
     case invalidEPUB
@@ -589,4 +294,11 @@ enum EPUBExtractionError: Error, LocalizedError {
             return "Failed to read the EPUB file."
         }
     }
+}
+
+enum ExtractionQuality {
+    case excellent
+    case good
+    case fair
+    case poor
 }

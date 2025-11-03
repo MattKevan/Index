@@ -9,6 +9,7 @@ import SwiftUI
 import WebKit
 import MarkdownUI
 import SwiftData
+import EPUBKit
 
 /// View for displaying EPUB documents with toggle between original EPUB rendering and extracted text
 struct EPUBDocumentView: View {
@@ -358,141 +359,38 @@ struct EPUBWebView: NSViewRepresentable {
     }
 
     private func extractAllChapters() async throws -> [String] {
-        print("📖 Extracting all chapters from: \(epubURL.lastPathComponent)")
+        print("📖 Extracting all chapters from EPUB with EPUBKit: \(epubURL.lastPathComponent)")
 
-        // Create temp directory
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-
-        defer {
-            try? FileManager.default.removeItem(at: tempDir)
+        // Parse EPUB using EPUBKit
+        guard let epubDocument = EPUBDocument(url: epubURL) else {
+            print("❌ EPUBKit failed to parse document")
+            throw NSError(domain: "EPUBError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse EPUB"])
         }
 
-        // Extract EPUB
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        print("✅ EPUBKit parsed: \(epubDocument.title ?? "Untitled")")
+        print("   Spine items: \(epubDocument.spine.items.count)")
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = ["-q", "-o", epubURL.path, "-d", tempDir.path]
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            print("❌ Unzip failed with status: \(process.terminationStatus)")
-            throw NSError(domain: "EPUBError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to extract EPUB"])
-        }
-
-        print("✅ EPUB extracted to temp directory")
-
-        // Parse container.xml
-        let containerPath = tempDir.appendingPathComponent("META-INF/container.xml")
-        guard let containerData = try? Data(contentsOf: containerPath),
-              let containerXML = String(data: containerData, encoding: .utf8),
-              let opfPathMatch = containerXML.range(of: #"full-path\s*=\s*"([^"]+)""#, options: .regularExpression),
-              let opfPath = extractPath(from: String(containerXML[opfPathMatch])) else {
-            print("❌ Failed to parse container.xml")
-            throw NSError(domain: "EPUBError", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not parse container.xml"])
-        }
-
-        print("✅ Found content.opf at: \(opfPath)")
-
-        // Parse content.opf
-        let opfURL = tempDir.appendingPathComponent(opfPath)
-        guard let opfData = try? Data(contentsOf: opfURL),
-              let opfXML = String(data: opfData, encoding: .utf8) else {
-            print("❌ Failed to read content.opf")
-            throw NSError(domain: "EPUBError", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not read content.opf"])
-        }
-
-        // Extract all spine items
-        var spineItems: [String] = []
-        let spinePattern = #"<itemref[^>]+idref="([^"]+)""#
-        if let regex = try? NSRegularExpression(pattern: spinePattern, options: []) {
-            let range = NSRange(opfXML.startIndex..., in: opfXML)
-            regex.enumerateMatches(in: opfXML, range: range) { match, _, _ in
-                guard let match = match,
-                      match.numberOfRanges == 2,
-                      let idrefRange = Range(match.range(at: 1), in: opfXML) else {
-                    return
-                }
-                let idref = String(opfXML[idrefRange])
-                spineItems.append(idref)
-            }
-        }
-
-        print("📚 Found \(spineItems.count) spine items: \(spineItems.prefix(3))")
-
-        // Build manifest map - try multiple patterns for different attribute orders
-        var manifest: [String: String] = [:]
-
-        // Pattern 1: id before href
-        let pattern1 = #"<item[^>]*\sid="([^"]+)"[^>]*\shref="([^"]+)""#
-        if let regex = try? NSRegularExpression(pattern: pattern1, options: []) {
-            let range = NSRange(opfXML.startIndex..., in: opfXML)
-            regex.enumerateMatches(in: opfXML, range: range) { match, _, _ in
-                guard let match = match,
-                      match.numberOfRanges == 3,
-                      let idRange = Range(match.range(at: 1), in: opfXML),
-                      let hrefRange = Range(match.range(at: 2), in: opfXML) else {
-                    return
-                }
-                let id = String(opfXML[idRange])
-                let href = String(opfXML[hrefRange])
-                manifest[id] = href
-            }
-        }
-
-        // Pattern 2: href before id (if first pattern didn't work)
-        if manifest.isEmpty {
-            let pattern2 = #"<item[^>]*\shref="([^"]+)"[^>]*\sid="([^"]+)""#
-            if let regex = try? NSRegularExpression(pattern: pattern2, options: []) {
-                let range = NSRange(opfXML.startIndex..., in: opfXML)
-                regex.enumerateMatches(in: opfXML, range: range) { match, _, _ in
-                    guard let match = match,
-                          match.numberOfRanges == 3,
-                          let hrefRange = Range(match.range(at: 1), in: opfXML),
-                          let idRange = Range(match.range(at: 2), in: opfXML) else {
-                        return
-                    }
-                    let id = String(opfXML[idRange])
-                    let href = String(opfXML[hrefRange])
-                    manifest[id] = href
-                }
-            }
-        }
-
-        print("📄 Found \(manifest.count) manifest items")
-
-        if manifest.isEmpty {
-            print("⚠️ No manifest items found - printing content.opf sample:")
-            print(String(opfXML.prefix(500)))
-        }
-
-        // Extract all chapters
         var chapters: [String] = []
-        let opfBasePath = (opfPath as NSString).deletingLastPathComponent
 
-        print("🔍 Extracting chapters from spine...")
-
-        for (index, spineID) in spineItems.enumerated() {
-            guard let chapterPath = manifest[spineID] else {
-                print("   ⚠️ Chapter \(index + 1): No manifest entry for spine ID '\(spineID)'")
+        for (index, spineItem) in epubDocument.spine.items.enumerated() {
+            // Get manifest item for this spine item
+            guard let manifestItem = epubDocument.manifest.items.first(where: { $0.id == spineItem.idref }) else {
+                print("   ⚠️ Chapter \(index + 1): No manifest for spine '\(spineItem.idref)'")
                 continue
             }
 
-            let chapterURL = tempDir.appendingPathComponent(opfBasePath).appendingPathComponent(chapterPath)
-            guard let chapterData = try? Data(contentsOf: chapterURL),
+            // Read chapter data
+            guard let chapterData = epubDocument.data(for: manifestItem),
                   let chapterHTML = String(data: chapterData, encoding: .utf8) else {
-                print("   ⚠️ Chapter \(index + 1): Failed to read \(chapterPath)")
+                print("   ⚠️ Chapter \(index + 1): Failed to read \(manifestItem.href)")
                 continue
             }
 
-            // Extract body content - use simple string operations for better compatibility
+            // Extract body content
             var bodyContent = chapterHTML
 
             // Find body tag start
             if let bodyStartRange = chapterHTML.range(of: "<body", options: .caseInsensitive) {
-                // Find the end of the opening body tag
                 if let bodyOpenEndRange = chapterHTML.range(of: ">", range: bodyStartRange.upperBound..<chapterHTML.endIndex) {
                     bodyContent = String(chapterHTML[bodyOpenEndRange.upperBound...])
                 }
@@ -503,7 +401,7 @@ struct EPUBWebView: NSViewRepresentable {
                 bodyContent = String(bodyContent[..<bodyEndRange.lowerBound])
             }
 
-            // Strip out <link> tags for stylesheets and fonts
+            // Strip out <link> and <style> tags
             let cleanContent = bodyContent
                 .replacingOccurrences(of: #"<link[^>]*>"#, with: "", options: [.regularExpression])
                 .replacingOccurrences(of: #"<style[^>]*>[\s\S]*?</style>"#, with: "", options: [.regularExpression, .caseInsensitive])
@@ -511,21 +409,12 @@ struct EPUBWebView: NSViewRepresentable {
             if !cleanContent.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
                 chapters.append(cleanContent)
                 print("   ✓ Chapter \(chapters.count): \(cleanContent.prefix(50))...")
-            } else {
-                print("   ⚠️ Chapter \(index + 1): Content empty after cleaning")
             }
         }
 
-        print("✅ Successfully extracted \(chapters.count)/\(spineItems.count) chapters")
+        print("✅ Successfully extracted \(chapters.count)/\(epubDocument.spine.items.count) chapters")
 
         return chapters
-    }
-
-    private func extractPath(from match: String) -> String? {
-        if let range = match.range(of: #""([^"]+)""#, options: .regularExpression) {
-            return String(match[range]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-        }
-        return nil
     }
 
     private func showErrorMessage(in webView: WKWebView, error: Error) async {
